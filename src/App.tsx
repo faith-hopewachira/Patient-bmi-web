@@ -7,10 +7,9 @@ import VitalsForm from './components/VitalsForm';
 import OverweightAssessmentForm from './components/OverweightAssessmentForm';
 import GeneralAssessmentForm from './components/GeneralAssessmentForm';
 import PatientListing from './components/PatientListing';
+import PatientDetails from './components/PatientDetails';
 
 /*
-App Component - Main Application Router
-
 This is the root component of the application that sets up the routing structure.
 
 ROUTE STRUCTURE:
@@ -20,6 +19,7 @@ ROUTE STRUCTURE:
 4. /overweight-assessment -> OverweightAssessmentForm (assessment form for patients with BMI > 25)
 5. /general-assessment -> GeneralAssessmentForm (assessment form for patients with BMI ≤ 25)
 6. /patient-listing -> PatientListing (displays all patients with their vitals and assessment data)
+7. /patient-details -> PatientDetails (detailed view of individual patient records)
 
 */
 const App: React.FC = () => {
@@ -38,6 +38,8 @@ const App: React.FC = () => {
           <Route path="/general-assessment" element={<GeneralAssessmentForm />} />
           
           <Route path="/patient-listing" element={<PatientListing />} />
+          
+          <Route path="/patient-details" element={<PatientDetails />} /> {/* Add this route */}
           
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

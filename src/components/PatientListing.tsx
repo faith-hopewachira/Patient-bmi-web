@@ -1,553 +1,414 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { patientApi, assessmentApi, vitalsApi } from '../services/api';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { patientApi, vitalsApi, assessmentApi } from '../services/api';
 
 /*
-PatientListing Component
+This React component serves as a comprehensive patient management interface that:
+1. Displays a searchable and filterable list of patients
+2. Shows key patient metrics (BMI status, last visits, age)
+3. Allows navigation to patient details, registration, and vitals recording
+4. Integrates with multiple API endpoints to fetch and display patient data
+5. Includes pagination for better data management
 
-This is the central dashboard that displays all registered patients
-with their latest vitals (BMI), assessment status, and visit history.
+DATA FETCHING & PROCESSING:
+   - Fetches patient data from patientApi
+   - Enriches patient records with:
+     * Latest vitals (BMI calculations and status)
+     * Assessment history (overweight/general assessments)
+   - Handles different API response structures via extractArrayFromResponse()
+   - Calculates age from date of birth
 
-Key Features:
-1. Fetches and displays all patients from the database
-2. Aggregates data from multiple sources (patients, vitals, assessments)
-3. Provides real-time BMI status with color coding
-4. Filtering capability by visit date
-5. Auto-refresh and data statistics
+FILTERING & SEARCH:
+   - Real-time search by name or patient ID
+   - Date filtering by last visit/assessment date
+   - Combined filter logic for search + date criteria
+   - Clear filters functionality
 
+USER INTERACTIONS:
+   - Click patient row to view detailed patient information
+   - "Record Vitals" button for quick vitals entry
+   - Register new patient via dedicated button
+   - Refresh data functionality
+   - Clear individual or all filters
+
+KEY DATA FLOWS:
+  1. On mount → fetchPatients() → calls multiple APIs → processes data → updates state
+  2. User interactions → update filters → filteredPatients recalculation → re-render
+  3. Navigation actions → route to appropriate pages with patient data in state
 */
 
 interface Patient {
   id: string;
-  patient_id: string; 
+  patient_id: string;
   first_name: string;
   last_name: string;
+  middle_name?: string;
   date_of_birth: string;
+  gender?: string;
+  registration_date?: string;
+  created_at?: string;
+  age?: number;
   last_bmi?: number;
   last_bmi_status?: string;
+  last_vitals_date?: string;
   last_assessment_date?: string;
   last_assessment_type?: string;
-  last_vitals_date?: string;
-  age?: number;
-  created_at?: string;
-}
-
-interface Vitals {
-  id: string;
-  patient_id: string;
-  visit_date: string;
-  height_cm: number;
-  weight_kg: number;
-  bmi: number | string;
-  created_at: string;
-}
-
-interface Assessment {
-  id: string;
-  patient_id: string;
-  visit_date?: string;
-  created_at?: string;
-  general_health?: string;
-  currently_using_drugs?: string;
-  diet_history?: string;
-  comments?: string;
-  type?: string;
 }
 
 const PatientListing: React.FC = () => {
+  const navigate = useNavigate();
   const [patients, setPatients] = useState<Patient[]>([]);
   const [filteredPatients, setFilteredPatients] = useState<Patient[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
   
-  const [loading, setLoading] = useState(true); 
-  const [error, setError] = useState<string | null>(null); 
-  const [filterDate, setFilterDate] = useState<string>('');       
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [paginatedPatients, setPaginatedPatients] = useState<Patient[]>([]);
+  
+  const extractArrayFromResponse = (data: any): any[] => {
+    if (Array.isArray(data)) return data;
+    if (data?.results && Array.isArray(data.results)) return data.results;
+    if (data?.data && Array.isArray(data.data)) return data.data;
+    return [];
+  };
 
-  /*
-  Function: Calculate age from date of birth
-  Purpose: Convert date of birth to current age for display
-  Parameters: dateOfBirth - string in YYYY-MM-DD format
-  Returns: Calculated age in years (0 if invalid)
-  */
-  const calculateAge = useCallback((dateOfBirth: string): number => {
+  const calculateAge = (dateOfBirth: string): number => {
     if (!dateOfBirth) return 0;
-    
-    try {
-      const birthDate = new Date(dateOfBirth);
-      const today = new Date();
-      
-      if (isNaN(birthDate.getTime())) return 0;
-      
-      let age = today.getFullYear() - birthDate.getFullYear();
-      const monthDiff = today.getMonth() - birthDate.getMonth();
-      
-      if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
-        age--;
-      }
-      
-      return age;
-    } catch (e) {
-      console.error('Error calculating age:', e);
-      return 0;
+    const birthDate = new Date(dateOfBirth);
+    const today = new Date();
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const monthDiff = today.getMonth() - birthDate.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+      age--;
     }
-  }, []);
+    return age;
+  };
 
-  /*
-  Function: Get BMI status category
-  Purpose: Categorize BMI value according to VitalsForm criteria
-  Criteria:
-    - Underweight: BMI < 18.5
-    - Normal: 18.5 ≤ BMI < 25
-    - Overweight: BMI ≥ 25
-  Parameters: bmi - numeric BMI value
-  Returns: Status string or 'No Data' for invalid values
-  */
-  const getBmiStatus = useCallback((bmi: number | undefined): string => {
-    if (!bmi || isNaN(bmi)) return 'No Data';
-    
+  const getBmiStatus = (bmi: number): string => {
     if (bmi < 18.5) return 'Underweight';
     if (bmi < 25) return 'Normal';
     return 'Overweight';
-  }, []);
+  };
 
-  /*
-  Function: Format date for display
-  Purpose: Convert ISO date string to readable format (DD Mon YYYY)
-  Parameters: dateString - ISO date string
-  Returns: Formatted date string or 'No Data' for invalid dates
-  */
-  const formatDate = useCallback((dateString: string | undefined): string => {
-    if (!dateString || dateString === 'No Data') return 'No Data';
-    
-    try {
-      const date = new Date(dateString);
-      if (isNaN(date.getTime())) {
-        return dateString;
-      }
-      
-      const day = date.getDate().toString().padStart(2, '0');
-      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      const month = monthNames[date.getMonth()];
-      const year = date.getFullYear();
-      
-      return `${day} ${month} ${year}`;
-    } catch (e) {
-      return dateString || 'No Data';
+  const formatGender = (gender: string = ''): string => {
+    if (!gender) return 'Unknown';
+    switch (gender.toUpperCase()) {
+      case 'M': return 'Male';
+      case 'F': return 'Female';
+      case 'O': return 'Other';
+      default: return gender;
     }
-  }, []);
+  };
 
-  /*
-  Function: Safe date conversion
-  Purpose: Convert date string to timestamp for sorting, handling invalid dates
-  Parameters: dateString - date string (optional)
-  Returns: Timestamp (number) or 0 for invalid dates
-  */
-  const getDateValue = useCallback((dateString?: string): number => {
-    if (!dateString) return 0;
-    try {
-      const date = new Date(dateString);
-      return isNaN(date.getTime()) ? 0 : date.getTime();
-    } catch (e) {
-      return 0;
-    }
-  }, []);
-
-  /*
-  Function: Parse BMI value safely
-  Purpose: Handle BMI values that may be strings or numbers from API
-  Parameters: bmi - any BMI value (string, number, null, undefined)
-  Returns: Parsed number or undefined for invalid values
-  */
-  const parseBmiValue = useCallback((bmi: any): number | undefined => {
-    if (bmi === null || bmi === undefined) return undefined;
-    
-    try {
-      const num = typeof bmi === 'string' ? parseFloat(bmi) : Number(bmi);
-      
-      if (isNaN(num) || !isFinite(num)) {
-        return undefined;
-      }
-      
-      return parseFloat(num.toFixed(1));
-    } catch (e) {
-      console.error('Error parsing BMI:', e, 'BMI value:', bmi);
-      return undefined;
-    }
-  }, []);
-
-  /*
-  Function: Fetch vitals for specific patient
-  Purpose: Retrieve most recent vitals record for a patient
-  Process: 
-    1. Call vitals API with patient ID
-    2. Handle different API response structures
-    3. Sort by most recent date
-    4. Return most recent vitals or null
-  */
-  const fetchPatientVitals = useCallback(async (patientId: string) => {
-    try {
-      console.log(`Fetching vitals for patient ${patientId}...`);
-      
-      const response = await vitalsApi.getVitals(patientId);
-      console.log('Vitals response data:', response.data);
-      
-      let vitalsArray: Vitals[] = [];
-      
-      if (Array.isArray(response.data)) {
-        vitalsArray = response.data;
-      } else if (response.data.results && Array.isArray(response.data.results)) {
-        vitalsArray = response.data.results;
-      } else if (response.data.data && Array.isArray(response.data.data)) {
-        vitalsArray = response.data.data;
-      }
-      
-      console.log(`Found ${vitalsArray.length} vitals records`);
-      
-      if (vitalsArray.length === 0) return null;
-      
-      const sortedVitals = vitalsArray.sort((a, b) => {
-        const dateA = getDateValue(a.visit_date || a.created_at);
-        const dateB = getDateValue(b.visit_date || b.created_at);
-        return dateB - dateA;
-      });
-      
-      return sortedVitals[0];
-      
-    } catch (error) {
-      console.log(`No vitals found for patient ${patientId}:`, error);
-      return null;
-    }
-  }, [getDateValue]);
-
-  /*
-  Function: Fetch assessments for specific patient
-  Purpose: Retrieve most recent assessment (general or overweight) for a patient
-  Process:
-    1. Fetch both assessment types in parallel using Promise.allSettled
-    2. Combine and sort all assessments
-    3. Return most recent assessment or null
-  */
-  const fetchPatientAssessments = useCallback(async (patientId: string) => {
-    try {
-      console.log(`Fetching assessments for patient ${patientId}...`);
-      
-      const [overweightResponse, generalResponse] = await Promise.allSettled([
-        assessmentApi.getPatientOverweightAssessments(patientId),
-        assessmentApi.getPatientGeneralAssessments(patientId)
-      ]);
-
-      const assessments: Assessment[] = [];
-
-      if (overweightResponse.status === 'fulfilled' && overweightResponse.value.data) {
-        let overweightAssessments: any[] = [];
-        const responseData = overweightResponse.value.data;
-        
-        if (Array.isArray(responseData)) {
-          overweightAssessments = responseData;
-        } else if (responseData.results && Array.isArray(responseData.results)) {
-          overweightAssessments = responseData.results;
-        } else if (responseData.data && Array.isArray(responseData.data)) {
-          overweightAssessments = responseData.data;
-        }
-        
-        overweightAssessments.forEach((assessment: any) => {
-          assessments.push({
-            ...assessment,
-            type: 'overweight',
-            visit_date: assessment.visit_date || assessment.created_at
-          });
-        });
-      }
-
-      if (generalResponse.status === 'fulfilled' && generalResponse.value.data) {
-        let generalAssessments: any[] = [];
-        const responseData = generalResponse.value.data;
-        
-        if (Array.isArray(responseData)) {
-          generalAssessments = responseData;
-        } else if (responseData.results && Array.isArray(responseData.results)) {
-          generalAssessments = responseData.results;
-        } else if (responseData.data && Array.isArray(responseData.data)) {
-          generalAssessments = responseData.data;
-        }
-        
-        generalAssessments.forEach((assessment: any) => {
-          assessments.push({
-            ...assessment,
-            type: 'general',
-            visit_date: assessment.visit_date || assessment.created_at
-          });
-        });
-      }
-
-      console.log(`Found ${assessments.length} assessments`);
-      
-      if (assessments.length === 0) return null;
-      
-      const sortedAssessments = assessments.sort((a, b) => {
-        const dateA = getDateValue(a.visit_date || a.created_at);
-        const dateB = getDateValue(b.visit_date || b.created_at);
-        return dateB - dateA;
-      });
-      
-      return sortedAssessments[0];
-
-    } catch (error) {
-      console.log(`No assessments found for patient ${patientId}:`, error);
-      return null;
-    }
-  }, [getDateValue]);
-
-  /*
-  Function: Process individual patient data
-  Purpose: Combine patient data with their latest vitals and assessments
-  Process:
-    1. Extract basic patient info
-    2. Fetch vitals and assessments in parallel
-    3. Calculate derived fields (age, BMI status)
-    4. Return complete patient object for display
-  */
-  const processPatientData = useCallback(async (patientData: any): Promise<Patient> => {
-    console.log('Processing patient:', patientData.first_name, patientData.last_name);
-    
-    const patientId = patientData.patient_number || 
-                     patientData.patient_id || 
-                     patientData.id || 
-                     `PAT${Date.now().toString().slice(-6)}`;
-    
-    let dateOfBirth = patientData.date_of_birth || '';
-    
-    const age = calculateAge(dateOfBirth);
-    
-    const [latestVitals, latestAssessment] = await Promise.all([
-      fetchPatientVitals(patientData.id),
-      fetchPatientAssessments(patientData.id)
-    ]);
-    
-    let lastBmi: number | undefined;
-    let lastVitalsDate: string | undefined;
-    let lastAssessmentDate: string | undefined;
-    let lastAssessmentType: string | undefined;
-    
-    if (latestVitals) {
-      console.log('Latest vitals data:', latestVitals);
-      
-      lastBmi = parseBmiValue(latestVitals.bmi);
-      lastVitalsDate = latestVitals.visit_date || latestVitals.created_at;
-    }
-    
-    if (latestAssessment) {
-      console.log('Latest assessment data:', latestAssessment);
-      lastAssessmentDate = latestAssessment.visit_date || latestAssessment.created_at;
-      lastAssessmentType = latestAssessment.type === 'overweight' ? 'Overweight Assessment' : 'General Assessment';
-    }
-    
-    const bmiStatus = lastBmi ? getBmiStatus(lastBmi) : 'No Data';
-    
-    const processedPatient: Patient = {
-      id: patientData.id,
-      patient_id: patientId,
-      first_name: patientData.first_name || '',
-      last_name: patientData.last_name || '',
-      date_of_birth: dateOfBirth,
-      age: age,
-      last_bmi: lastBmi,
-      last_bmi_status: bmiStatus,
-      last_vitals_date: lastVitalsDate,
-      last_assessment_date: lastAssessmentDate,
-      last_assessment_type: lastAssessmentType,
-      created_at: patientData.created_at || patientData.date_created || undefined,
-    };
-    
-    console.log(`Processed patient: ${patientData.first_name} ${patientData.last_name}, BMI: ${lastBmi}, Status: ${bmiStatus}`);
-    return processedPatient;
-  }, [calculateAge, getBmiStatus, fetchPatientVitals, fetchPatientAssessments, parseBmiValue]);
-
-  /*
-  Function: Fetch all patients with aggregated data
-  Purpose: Main data fetching function for the component
-  Process:
-    1. Fetch basic patient list from API
-    2. Process each patient in parallel with their vitals/assessments
-    3. Sort by most recently created
-    4. Calculate statistics for debugging
-    5. Update component state
-  */
-  const fetchPatients = useCallback(async () => {
+  const fetchPatients = async () => {
     try {
       setLoading(true);
-      setError(null);
-      
       console.log('Fetching patients from API...');
       
       const response = await patientApi.getPatients();
       console.log('Patients API response:', response.data);
       
-      if (response.data) {
-        let patientsArray: any[] = [];
-        
-        if (response.data.results && Array.isArray(response.data.results)) {
-          patientsArray = response.data.results;
-        } 
-        else if (Array.isArray(response.data)) {
-          patientsArray = response.data;
-        }
-        else if (response.data.data && Array.isArray(response.data.data)) {
-          patientsArray = response.data.data;
-        }
-        else {
-          for (const key in response.data) {
-            if (Array.isArray(response.data[key])) {
-              patientsArray = response.data[key];
-              break;
+      const patientsArray = extractArrayFromResponse(response.data);
+      console.log(`Extracted ${patientsArray.length} patients`);
+      
+      const basicPatients: Patient[] = patientsArray.map((p: any) => ({
+        id: p.id,
+        patient_id: p.patient_id || `PAT${p.id.substring(0, 8).toUpperCase()}`,
+        first_name: p.first_name,
+        last_name: p.last_name,
+        middle_name: p.middle_name,
+        date_of_birth: p.date_of_birth,
+        gender: p.gender,
+        registration_date: p.registration_date || p.created_at,
+        age: p.age || calculateAge(p.date_of_birth),
+        created_at: p.created_at,
+        last_bmi: undefined,
+        last_bmi_status: undefined,
+        last_vitals_date: undefined,
+        last_assessment_date: undefined,
+        last_assessment_type: undefined,
+      }));
+      
+      const patientsWithDetails = await Promise.all(
+        basicPatients.map(async (patient) => {
+          try {
+            const vitalsResponse = await vitalsApi.getVitals(patient.id);
+            const vitalsArray = extractArrayFromResponse(vitalsResponse.data);
+            
+            if (vitalsArray.length > 0) {
+              vitalsArray.sort((a: any, b: any) => 
+                new Date(b.visit_date || b.created_at).getTime() - 
+                new Date(a.visit_date || a.created_at).getTime()
+              );
+              
+              const latestVital = vitalsArray[0];
+              patient.last_bmi = typeof latestVital.bmi === 'string' ? 
+                parseFloat(latestVital.bmi) : latestVital.bmi;
+              patient.last_bmi_status = getBmiStatus(patient.last_bmi || 0);
+              patient.last_vitals_date = latestVital.visit_date || latestVital.created_at;
             }
+            
+            try {
+              const overweightResponse = await assessmentApi.getPatientOverweightAssessments(patient.id);
+              const overweightArray = extractArrayFromResponse(overweightResponse.data);
+              
+              if (overweightArray.length > 0) {
+                overweightArray.sort((a: any, b: any) => 
+                  new Date(b.visit_date || b.created_at).getTime() - 
+                  new Date(a.visit_date || a.created_at).getTime()
+                );
+                
+                const latestAssessment = overweightArray[0];
+                patient.last_assessment_date = latestAssessment.visit_date || latestAssessment.created_at;
+                patient.last_assessment_type = 'Overweight';
+              } else {
+                const generalResponse = await assessmentApi.getPatientGeneralAssessments(patient.id);
+                const generalArray = extractArrayFromResponse(generalResponse.data);
+                
+                if (generalArray.length > 0) {
+                  generalArray.sort((a: any, b: any) => 
+                    new Date(b.visit_date || b.created_at).getTime() - 
+                    new Date(a.visit_date || a.created_at).getTime()
+                  );
+                  
+                  const latestAssessment = generalArray[0];
+                  patient.last_assessment_date = latestAssessment.visit_date || latestAssessment.created_at;
+                  patient.last_assessment_type = 'General';
+                }
+              }
+            } catch (assessmentError) {
+              console.log(`No assessments found for patient ${patient.patient_id}`);
+            }
+            
+          } catch (error) {
+            console.error(`Error fetching details for patient ${patient.patient_id}:`, error);
           }
-        }
-        
-        console.log(`Found ${patientsArray.length} patients`);
-        
-        if (patientsArray.length > 0) {
-          const patientsPromises = patientsArray.map(patientData => 
-            processPatientData(patientData)
-          );
           
-          const patientsData = await Promise.all(patientsPromises);
-          
-          const validPatients = patientsData.filter(patient => 
-            patient.first_name || patient.last_name
-          );
-          
-          const sortedPatients = validPatients.sort((a, b) => {
-            const dateA = a.created_at ? getDateValue(a.created_at) : 0;
-            const dateB = b.created_at ? getDateValue(b.created_at) : 0;
-            return dateB - dateA;
-          });
-          
-          const statusCounts: Record<string, number> = {};
-          let patientsWithBmi = 0;
-          
-          sortedPatients.forEach(patient => {
-            const status = patient.last_bmi_status || 'No Data';
-            statusCounts[status] = (statusCounts[status] || 0) + 1;
-            if (patient.last_bmi !== undefined) patientsWithBmi++;
-          });
-          
-          console.log('Patient BMI Status Distribution:', statusCounts);
-          console.log(`Total patients: ${sortedPatients.length}`);
-          console.log(`Patients with BMI data: ${patientsWithBmi}`);
-          
-          setPatients(sortedPatients);
-          setFilteredPatients(sortedPatients);
-        } else {
-          console.log('No patients found in response');
-          setPatients([]);
-          setFilteredPatients([]);
-        }
-      } else {
-        console.log('No data in response');
-        setError('No patient data received from server');
+          return patient;
+        })
+      );
+      
+      setPatients(patientsWithDetails);
+      setFilteredPatients(patientsWithDetails);
+      
+      if (patientsWithDetails.length > 0) {
+        console.log('First patient with details:', patientsWithDetails[0]);
       }
-    } catch (err: any) {
-      console.error('Error fetching patients:', err);
-      setError(`Failed to load patients: ${err.message}`);
+      
+    } catch (error) {
+      console.error('Error fetching patients:', error);
     } finally {
       setLoading(false);
     }
-  }, [processPatientData, getDateValue]);
-
-  /*
-  Function: Handle date filter change
-  Purpose: Filter patients by their last assessment date
-  Parameters: date - YYYY-MM-DD format date string
-  Process: Filters patients to show only those with assessments on specified date
-  */
-  const handleFilterDateChange = (date: string) => {
-    setFilterDate(date);
-    
-    if (!date) {
+  };
+  
+  useEffect(() => {
+    fetchPatients();
+  }, []);
+  
+  useEffect(() => {
+    if (!searchTerm.trim() && !dateFilter) {
       setFilteredPatients(patients);
+      setCurrentPage(1);
       return;
     }
     
+    const term = searchTerm.toLowerCase();
+    
     const filtered = patients.filter(patient => {
-      if (!patient.last_assessment_date) return false;
+      const matchesSearch = !searchTerm.trim() || 
+        patient.first_name?.toLowerCase().includes(term) ||
+        patient.last_name?.toLowerCase().includes(term) ||
+        patient.patient_id?.toLowerCase().includes(term) ||
+        `${patient.first_name} ${patient.last_name}`.toLowerCase().includes(term);
       
-      try {
-        const assessmentDate = new Date(patient.last_assessment_date).toISOString().split('T')[0];
-        return assessmentDate === date;
-      } catch (e) {
-        return false;
+      let matchesDate = true;
+      if (dateFilter) {
+        const filterDate = new Date(dateFilter);
+        let hasMatchingDate = false;
+        
+        if (patient.last_vitals_date) {
+          const vitalsDate = new Date(patient.last_vitals_date);
+          if (
+            vitalsDate.getFullYear() === filterDate.getFullYear() &&
+            vitalsDate.getMonth() === filterDate.getMonth() &&
+            vitalsDate.getDate() === filterDate.getDate()
+          ) {
+            hasMatchingDate = true;
+          }
+        }
+        
+        if (patient.last_assessment_date) {
+          const assessmentDate = new Date(patient.last_assessment_date);
+          if (
+            assessmentDate.getFullYear() === filterDate.getFullYear() &&
+            assessmentDate.getMonth() === filterDate.getMonth() &&
+            assessmentDate.getDate() === filterDate.getDate()
+          ) {
+            hasMatchingDate = true;
+          }
+        }
+        
+        matchesDate = hasMatchingDate;
       }
+      
+      return matchesSearch && matchesDate;
     });
     
     setFilteredPatients(filtered);
-  };
-
-  /*
-  Function: Get BMI status background color
-  Purpose: Visual color coding for BMI status badges
-  Parameters: status - BMI status string
-  Returns: Background color matching VitalsForm color scheme
-  */
-  const getStatusColor = (status: string): string => {
-    if (!status || status === 'No Data') return '#f3f4f6';
-    
-    switch (status.toLowerCase()) {
-      case 'underweight':
-        return '#fef3c7';
-      case 'normal':
-        return '#d1fae5';
-      case 'overweight':
-        return '#fee2e2';
-      default:
-        return '#f3f4f6';
-    }
-  };
-
-  /*
-  Function: Get BMI status text color
-  Purpose: Contrast text color for BMI status badges
-  Parameters: status - BMI status string
-  Returns: Text color matching VitalsForm color scheme
-  */
-  const getStatusTextColor = (status: string): string => {
-    if (!status || status === 'No Data') return '#6b7280';
-    
-    switch (status.toLowerCase()) {
-      case 'underweight':
-        return '#92400e';
-      case 'normal':
-        return '#065f46';
-      case 'overweight':
-        return '#991b1b';
-      default:
-        return '#6b7280'; 
-    }
-  };
-
-  /*
-  Function: Clear all filters
-  Purpose: Reset filter state and show all patients
-  */
-  const handleClearFilters = () => {
-    setFilterDate('');
-    setFilteredPatients(patients);
-  };
-
-  /*
-  Function: Force refresh data
-  Purpose: Manual refresh button handler to reload all patient data
-  */
-  const forceRefresh = useCallback(() => {
-    fetchPatients();
-  }, [fetchPatients]);
-
+    setCurrentPage(1);
+  }, [searchTerm, dateFilter, patients]);
+  
   useEffect(() => {
-    fetchPatients();
-  }, [fetchPatients]);
-
-  /*
-  Loading State Display
-  Shows spinner and loading message while fetching data
-  */
+    const indexOfLastItem = currentPage * itemsPerPage;
+    const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+    const currentItems = filteredPatients.slice(indexOfFirstItem, indexOfLastItem);
+    setPaginatedPatients(currentItems);
+  }, [filteredPatients, currentPage, itemsPerPage]);
+  
+  const totalPages = Math.ceil(filteredPatients.length / itemsPerPage);
+  
+  const handlePageChange = (pageNumber: number) => {
+    if (pageNumber < 1 || pageNumber > totalPages) return;
+    setCurrentPage(pageNumber);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  
+  const handleItemsPerPageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newItemsPerPage = parseInt(e.target.value);
+    setItemsPerPage(newItemsPerPage);
+    setCurrentPage(1);
+  };
+  
+  const getPageNumbers = () => {
+    const pageNumbers = [];
+    const maxVisiblePages = 5;
+    
+    if (totalPages <= maxVisiblePages) {
+      for (let i = 1; i <= totalPages; i++) {
+        pageNumbers.push(i);
+      }
+    } else {
+      if (currentPage <= 3) {
+        for (let i = 1; i <= 4; i++) {
+          pageNumbers.push(i);
+        }
+        pageNumbers.push(-1); 
+        pageNumbers.push(totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        pageNumbers.push(1);
+        pageNumbers.push(-1);
+        for (let i = totalPages - 3; i <= totalPages; i++) {
+          pageNumbers.push(i);
+        }
+      } else {
+        pageNumbers.push(1);
+        pageNumbers.push(-1);
+        for (let i = currentPage - 1; i <= currentPage + 1; i++) {
+          pageNumbers.push(i);
+        }
+        pageNumbers.push(-1);
+        pageNumbers.push(totalPages);
+      }
+    }
+    
+    return pageNumbers;
+  };
+  
+  const handlePatientClick = (patient: Patient) => {
+    console.log('Patient clicked:', patient);
+    navigate('/patient-details', { 
+      state: { 
+        patient: {
+          id: patient.id,
+          patient_id: patient.patient_id,
+          first_name: patient.first_name,
+          last_name: patient.last_name,
+          middle_name: patient.middle_name,
+          date_of_birth: patient.date_of_birth,
+          gender: patient.gender,
+          registration_date: patient.registration_date,
+          age: patient.age,
+          created_at: patient.created_at,
+        }
+      } 
+    });
+  };
+  
+  const handleRecordVitals = (patient: Patient, e: React.MouseEvent) => {
+    e.stopPropagation();
+    console.log('Recording vitals for:', patient);
+    navigate('/vitals-form', { 
+      state: { 
+        patient: {
+          id: patient.id,
+          patient_id: patient.patient_id,
+          first_name: patient.first_name,
+          last_name: patient.last_name,
+          middle_name: patient.middle_name,
+          date_of_birth: patient.date_of_birth,
+          gender: patient.gender
+        },
+        redirectBack: true
+      } 
+    });
+  };
+  
+  const navigateToRegistration = () => {
+    navigate('/register-patient');
+  };
+  
+  const handleRefresh = async () => {
+    await fetchPatients();
+    setSearchTerm('');
+    setDateFilter('');
+    setCurrentPage(1);
+    console.log(`Refreshed! Loaded ${patients.length} patients.`);
+  };
+  
+  const getStatusColor = (status: string = ''): string => {
+    if (!status || status === 'No Data') return '#f3f4f6';
+    switch (status.toLowerCase()) {
+      case 'underweight': return '#fef3c7';
+      case 'normal': return '#d1fae5';
+      case 'overweight': return '#fee2e2';
+      default: return '#f3f4f6';
+    }
+  };
+  
+  const getStatusTextColor = (status: string = ''): string => {
+    if (!status || status === 'No Data') return '#6b7280';
+    switch (status.toLowerCase()) {
+      case 'underweight': return '#92400e';
+      case 'normal': return '#065f46';
+      case 'overweight': return '#991b1b';
+      default: return '#6b7280'; 
+    }
+  };
+  
+  const formatDate = (dateString: string = ''): string => {
+    if (!dateString) return 'N/A';
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return 'Invalid Date';
+      return date.toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+      });
+    } catch {
+      return 'Invalid Date';
+    }
+  };
+  
+  const clearFilters = () => {
+    setSearchTerm('');
+    setDateFilter('');
+    setCurrentPage(1);
+  };
+  
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '4rem' }}>
@@ -562,15 +423,12 @@ const PatientListing: React.FC = () => {
           marginBottom: '1rem'
         }}></div>
         <p>Loading patient data...</p>
-        <p style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-          Fetching patient records, vitals, and assessments...
-        </p>
       </div>
     );
   }
-
+  
   return (
-    <div>
+    <div style={{ padding: '2rem' }}>
       <div style={{ 
         display: 'flex', 
         justifyContent: 'space-between', 
@@ -587,13 +445,15 @@ const PatientListing: React.FC = () => {
         }}>
           Patient Listing
         </h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem', color: '#6b7280' }}>
-          <span>Showing {filteredPatients.length} patients</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+            Showing {filteredPatients.length} of {patients.length} patients
+          </span>
           <button
-            onClick={forceRefresh}
+            onClick={navigateToRegistration}
             style={{
-              padding: '0.25rem 0.75rem',
-              backgroundColor: '#3b82f6',
+              padding: '0.5rem 1rem',
+              backgroundColor: '#10b981',
               color: 'white',
               border: 'none',
               borderRadius: '6px',
@@ -601,81 +461,239 @@ const PatientListing: React.FC = () => {
               fontSize: '0.875rem',
               display: 'flex',
               alignItems: 'center',
-              gap: '0.25rem'
+              gap: '0.5rem',
+              fontWeight: 500
+            }}
+            title="Register new patient"
+          >
+            <span style={{ fontSize: '1.125rem' }}>+</span>
+            Register Patient
+          </button>
+          <button
+            onClick={handleRefresh}
+            disabled={loading}
+            style={{
+              padding: '0.5rem 1rem',
+              backgroundColor: '#3b82f6',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              fontSize: '0.875rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.25rem',
+              opacity: loading ? 0.6 : 1
             }}
             title="Refresh data"
           >
-            ↻ Refresh
+            {loading ? (
+              <div style={{
+                width: '16px',
+                height: '16px',
+                border: '2px solid white',
+                borderTop: '2px solid transparent',
+                borderRadius: '50%',
+                animation: 'spin 1s linear infinite'
+              }}></div>
+            ) : (
+              '↻'
+            )}
+            Refresh
           </button>
         </div>
       </div>
       
+      {/* Simple Filters Section */}
       <div style={{ 
-        background: 'white',
-        padding: '1.5rem',
-        borderRadius: '8px',
-        marginBottom: '2rem',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+        display: 'grid', 
+        gridTemplateColumns: '1fr 1fr auto',
+        gap: '1rem',
+        marginBottom: '1.5rem',
+        alignItems: 'end'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+        {/* Search Filter */}
+        <div>
           <label style={{ 
             display: 'block', 
+            marginBottom: '0.5rem', 
+            fontSize: '0.875rem',
             fontWeight: 500,
-            minWidth: '120px'
+            color: '#374151'
           }}>
-            Filter by Visit Date:
+            Search
+          </label>
+          <div style={{ position: 'relative' }}>
+            <input
+              type="text"
+              placeholder="Search by name or patient ID..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '0.75rem 1rem 0.75rem 2.5rem',
+                border: '1px solid #d1d5db',
+                borderRadius: '6px',
+                fontSize: '0.875rem'
+              }}
+            />
+            <div style={{
+              position: 'absolute',
+              left: '0.75rem',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              color: '#9ca3af'
+            }}>
+              🔍
+            </div>
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                style={{
+                  position: 'absolute',
+                  right: '0.75rem',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  color: '#9ca3af',
+                  cursor: 'pointer',
+                  fontSize: '1.25rem'
+                }}
+              >
+                ×
+              </button>
+            )}
+          </div>
+        </div>
+        
+        {/* Date Filter */}
+        <div>
+          <label style={{ 
+            display: 'block', 
+            marginBottom: '0.5rem', 
+            fontSize: '0.875rem',
+            fontWeight: 500,
+            color: '#374151'
+          }}>
+            Filter by Date
           </label>
           <input
             type="date"
-            value={filterDate}
-            onChange={(e) => handleFilterDateChange(e.target.value)}
-            max={new Date().toISOString().split('T')[0]}
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value)}
             style={{
-              padding: '0.5rem 1rem',
-              border: '2px solid #d1d5db',
+              width: '100%',
+              padding: '0.75rem 1rem',
+              border: '1px solid #d1d5db',
               borderRadius: '6px',
-              minWidth: '200px'
+              fontSize: '0.875rem'
             }}
           />
-          {filterDate && (
-            <button
-              onClick={handleClearFilters}
-              style={{
-                padding: '0.5rem 1rem',
-                backgroundColor: '#6b7280',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '0.875rem'
-              }}
-            >
-              Clear Filter
-            </button>
-          )}
         </div>
-        <div style={{ marginTop: '1rem', fontSize: '0.875rem', color: '#6b7280' }}>
-          <p>
-            {filterDate 
-              ? `Showing patients with assessments on ${filterDate}`
-              : 'Showing all patients'}
-          </p>
+        
+        {/* Clear Filters Button */}
+        <div>
+          <button
+            onClick={clearFilters}
+            disabled={!searchTerm && !dateFilter}
+            style={{
+              padding: '0.75rem 1rem',
+              backgroundColor: '#6b7280',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: !searchTerm && !dateFilter ? 'not-allowed' : 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: 500,
+              opacity: !searchTerm && !dateFilter ? 0.5 : 1,
+              height: '46px'
+            }}
+          >
+            Clear Filters
+          </button>
         </div>
       </div>
       
-      {error && (
-        <div style={{
-          backgroundColor: '#fee2e2',
-          border: '1px solid #ef4444',
-          borderRadius: '8px',
-          padding: '1rem',
+      {/* Active Filters Display */}
+      {(searchTerm || dateFilter) && (
+        <div style={{ 
+          padding: '0.75rem',
+          backgroundColor: '#eff6ff',
+          borderRadius: '6px',
+          border: '1px solid #dbeafe',
           marginBottom: '1.5rem',
-          color: '#991b1b'
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem'
         }}>
-          <p style={{ margin: 0, fontWeight: 500 }}>Error: {error}</p>
-          <p style={{ margin: '0.25rem 0 0', fontSize: '0.875rem' }}>
-            Check the console for detailed information.
-          </p>
+          <span style={{ 
+            fontSize: '0.875rem', 
+            color: '#1e40af',
+            fontWeight: 500
+          }}>
+            Active Filters:
+          </span>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            {searchTerm && (
+              <span style={{
+                fontSize: '0.75rem',
+                backgroundColor: '#dbeafe',
+                color: '#1e40af',
+                padding: '0.25rem 0.5rem',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem'
+              }}>
+                Search: "{searchTerm}"
+                <button
+                  onClick={() => setSearchTerm('')}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#1e40af',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    padding: 0
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {dateFilter && (
+              <span style={{
+                fontSize: '0.75rem',
+                backgroundColor: '#dbeafe',
+                color: '#1e40af',
+                padding: '0.25rem 0.5rem',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem'
+              }}>
+                Date: {new Date(dateFilter).toLocaleDateString('en-GB', {
+                  day: '2-digit',
+                  month: 'short',
+                  year: 'numeric'
+                })}
+                <button
+                  onClick={() => setDateFilter('')}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#1e40af',
+                    cursor: 'pointer',
+                    fontSize: '0.875rem',
+                    padding: 0
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            )}
+          </div>
         </div>
       )}
       
@@ -686,90 +704,76 @@ const PatientListing: React.FC = () => {
         boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
         marginBottom: '2rem'
       }}>
-        {filteredPatients.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '4rem' }}>
-            <div style={{
-              fontSize: '3rem',
-              color: '#d1d5db',
-              marginBottom: '1rem'
-            }}>
-              👨‍⚕️
-            </div>
-            <p style={{ fontSize: '1.125rem', marginBottom: '1rem', color: '#4b5563' }}>
-              {filterDate 
-                ? `No patients found with visits on ${filterDate}`
-                : patients.length === 0 
-                  ? 'No patients found in the system' 
-                  : 'No patients match your filters'}
-            </p>
-            {filterDate && (
-              <button
-                onClick={handleClearFilters}
-                style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#3b82f6',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  marginTop: '1rem'
-                }}
-              >
-                Clear filter to see all patients
-              </button>
-            )}
-          </div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '600px' }}>
-              <thead style={{ background: '#f9fafb' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '600px' }}>
+            <thead style={{ background: '#f9fafb' }}>
+              <tr>
+                <th style={{ 
+                  padding: '1rem',
+                  textAlign: 'left',
+                  fontWeight: 600,
+                  fontSize: '0.875rem',
+                  color: '#374151',
+                  borderBottom: '2px solid #e5e7eb'
+                }}>
+                  Patient Name
+                </th>
+                <th style={{ 
+                  padding: '1rem',
+                  textAlign: 'left',
+                  fontWeight: 600,
+                  fontSize: '0.875rem',
+                  color: '#374151',
+                  borderBottom: '2px solid #e5e7eb'
+                }}>
+                  Age
+                </th>
+                <th style={{ 
+                  padding: '1rem',
+                  textAlign: 'left',
+                  fontWeight: 600,
+                  fontSize: '0.875rem',
+                  color: '#374151',
+                  borderBottom: '2px solid #e5e7eb'
+                }}>
+                  BMI Status
+                </th>
+                <th style={{ 
+                  padding: '1rem',
+                  textAlign: 'left',
+                  fontWeight: 600,
+                  fontSize: '0.875rem',
+                  color: '#374151',
+                  borderBottom: '2px solid #e5e7eb'
+                }}>
+                  Last Visit
+                </th>
+                <th style={{ 
+                  padding: '1rem',
+                  textAlign: 'left',
+                  fontWeight: 600,
+                  fontSize: '0.875rem',
+                  color: '#374151',
+                  borderBottom: '2px solid #e5e7eb'
+                }}>
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {paginatedPatients.length === 0 ? (
                 <tr>
-                  <th style={{ 
-                    padding: '1rem',
-                    textAlign: 'left',
-                    fontWeight: 600,
-                    fontSize: '0.875rem',
-                    color: '#374151',
-                    borderBottom: '2px solid #e5e7eb'
-                  }}>
-                    Patient Name
-                  </th>
-                  <th style={{ 
-                    padding: '1rem',
-                    textAlign: 'left',
-                    fontWeight: 600,
-                    fontSize: '0.875rem',
-                    color: '#374151',
-                    borderBottom: '2px solid #e5e7eb'
-                  }}>
-                    Age
-                  </th>
-                  <th style={{ 
-                    padding: '1rem',
-                    textAlign: 'left',
-                    fontWeight: 600,
-                    fontSize: '0.875rem',
-                    color: '#374151',
-                    borderBottom: '2px solid #e5e7eb'
-                  }}>
-                    BMI Status
-                  </th>
-                  <th style={{ 
-                    padding: '1rem',
-                    textAlign: 'left',
-                    fontWeight: 600,
-                    fontSize: '0.875rem',
-                    color: '#374151',
-                    borderBottom: '2px solid #e5e7eb'
-                  }}>
-                    Last Visit
-                  </th>
+                  <td colSpan={5} style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>
+                    {searchTerm || dateFilter ? 
+                      `No patients found matching the selected filters` : 
+                      'No patients found'}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {filteredPatients.map((patient, index) => {
-                  const statusColor = getStatusColor(patient.last_bmi_status || '');
-                  const textColor = getStatusTextColor(patient.last_bmi_status || '');
+              ) : (
+                paginatedPatients.map((patient, index) => {
+                  const status = patient.last_bmi_status || 'No Data';
+                  const statusColor = getStatusColor(status);
+                  const textColor = getStatusTextColor(status);
                   
                   return (
                     <tr 
@@ -777,27 +781,39 @@ const PatientListing: React.FC = () => {
                       style={{ 
                         borderBottom: '1px solid #f3f4f6',
                         backgroundColor: index % 2 === 0 ? 'white' : '#f9fafb',
-                        transition: 'background-color 0.2s'
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = '#f3f4f6';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = index % 2 === 0 ? 'white' : '#f9fafb';
                       }}
                     >
-                      <td style={{ padding: '1rem' }}>
-                        <div style={{ fontWeight: 500, fontSize: '1rem', color: '#111827' }}>
+                      <td style={{ padding: '1rem', cursor: 'pointer' }} onClick={() => handlePatientClick(patient)}>
+                        <div style={{ 
+                          fontWeight: 500, 
+                          fontSize: '1rem', 
+                          color: '#111827'
+                        }}>
                           {patient.first_name} {patient.last_name}
+                          <span style={{ 
+                            fontSize: '0.75rem', 
+                            color: '#3b82f6',
+                            marginLeft: '0.5rem',
+                            backgroundColor: '#eff6ff',
+                            padding: '0.125rem 0.375rem',
+                            borderRadius: '4px'
+                          }}>
+                            ID: {patient.patient_id}
+                          </span>
                         </div>
-                        {patient.date_of_birth && patient.date_of_birth !== 'No Data' && (
+                        {patient.date_of_birth && (
                           <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
                             DOB: {formatDate(patient.date_of_birth)}
+                            {patient.gender && (
+                              <span style={{ marginLeft: '0.75rem' }}>
+                                • {formatGender(patient.gender)}
+                              </span>
+                            )}
                           </div>
                         )}
                       </td>
                       
-                      <td style={{ padding: '1rem' }}>
+                      <td style={{ padding: '1rem', cursor: 'pointer' }} onClick={() => handlePatientClick(patient)}>
                         <div style={{ 
                           fontWeight: 600, 
                           fontSize: '1.125rem', 
@@ -806,14 +822,14 @@ const PatientListing: React.FC = () => {
                           alignItems: 'center',
                           gap: '0.5rem'
                         }}>
-                          {patient.age || 'N/A'}
+                          {patient.age || calculateAge(patient.date_of_birth) || 'N/A'}
                           {patient.age && patient.age > 0 && (
                             <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>years</span>
                           )}
                         </div>
                       </td>
                       
-                      <td style={{ padding: '1rem' }}>
+                      <td style={{ padding: '1rem', cursor: 'pointer' }} onClick={() => handlePatientClick(patient)}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                           <span style={{
                             display: 'inline-flex',
@@ -826,10 +842,9 @@ const PatientListing: React.FC = () => {
                             color: textColor,
                             backgroundColor: statusColor,
                             minWidth: '100px',
-                            height: '24px',
-                            border: patient.last_bmi_status === 'No Data' ? '1px dashed #d1d5db' : 'none'
+                            height: '24px'
                           }}>
-                            {patient.last_bmi_status || 'No Data'}
+                            {status}
                           </span>
                           {patient.last_bmi !== undefined ? (
                             <div style={{ 
@@ -839,7 +854,7 @@ const PatientListing: React.FC = () => {
                               padding: '0.25rem 0.5rem',
                               borderRadius: '4px'
                             }}>
-                              BMI: {typeof patient.last_bmi === 'number' ? patient.last_bmi.toFixed(1) : 'N/A'}
+                              BMI: {patient.last_bmi.toFixed(1)}
                             </div>
                           ) : (
                             <div style={{ 
@@ -851,31 +866,17 @@ const PatientListing: React.FC = () => {
                             </div>
                           )}
                         </div>
-                        {patient.last_bmi_status && patient.last_bmi_status !== 'No Data' && patient.last_bmi !== undefined && (
-                          <div style={{ 
-                            fontSize: '0.75rem', 
-                            color: '#6b7280',
-                            marginTop: '0.25rem',
-                            fontStyle: 'italic'
-                          }}>
-                            {patient.last_bmi_status === 'Underweight' && `BMI < 18.5`}
-                            {patient.last_bmi_status === 'Normal' && `18.5 ≤ BMI < 25`}
-                            {patient.last_bmi_status === 'Overweight' && `BMI ≥ 25`}
-                          </div>
-                        )}
                       </td>
                       
-                      <td style={{ padding: '1rem' }}>
-                        {patient.last_assessment_date || patient.last_vitals_date ? (
+                      <td style={{ padding: '1rem', cursor: 'pointer' }} onClick={() => handlePatientClick(patient)}>
+                        {patient.last_assessment_date ? (
                           <>
                             <div style={{ 
                               fontWeight: 500, 
                               color: '#1f2937',
                               fontSize: '0.875rem'
                             }}>
-                              {patient.last_assessment_date ? 
-                                formatDate(patient.last_assessment_date) : 
-                                formatDate(patient.last_vitals_date)}
+                              {formatDate(patient.last_assessment_date)}
                             </div>
                             {patient.last_assessment_type && (
                               <div style={{ 
@@ -890,20 +891,22 @@ const PatientListing: React.FC = () => {
                                 {patient.last_assessment_type}
                               </div>
                             )}
-                            {!patient.last_assessment_date && patient.last_vitals_date && (
-                              <div style={{ 
-                                fontSize: '0.75rem', 
-                                color: '#10b981',
-                                marginTop: '0.25rem',
-                                backgroundColor: '#d1fae5',
-                                padding: '0.125rem 0.375rem',
-                                borderRadius: '4px',
-                                display: 'inline-block'
-                              }}>
-                                Vitals Only
-                              </div>
-                            )}
                           </>
+                        ) : patient.last_vitals_date ? (
+                          <div style={{ color: '#6b7280', fontSize: '0.875rem' }}>
+                            {formatDate(patient.last_vitals_date)}
+                            <div style={{ 
+                              fontSize: '0.75rem', 
+                              color: '#10b981',
+                              marginTop: '0.25rem',
+                              backgroundColor: '#d1fae5',
+                              padding: '0.125rem 0.375rem',
+                              borderRadius: '4px',
+                              display: 'inline-block'
+                            }}>
+                              Vitals Only
+                            </div>
+                          </div>
                         ) : (
                           <div style={{ 
                             color: '#9ca3af',
@@ -914,26 +917,179 @@ const PatientListing: React.FC = () => {
                           </div>
                         )}
                       </td>
+                      
+                      <td style={{ padding: '1rem' }}>
+                        <button
+                          onClick={(e) => handleRecordVitals(patient, e)}
+                          style={{
+                            padding: '0.375rem 0.75rem',
+                            backgroundColor: '#10b981',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem',
+                            fontWeight: 500
+                          }}
+                          title="Record vitals for this patient"
+                        >
+                          Record Vitals
+                        </button>
+                      </td>
                     </tr>
                   );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
+      
+      {/* Pagination Controls */}
+      {filteredPatients.length > 0 && (
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '1rem',
+          backgroundColor: 'white',
+          borderRadius: '8px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+          marginBottom: '2rem',
+          flexWrap: 'wrap',
+          gap: '1rem'
+        }}>
+          {/* Left side: Items per page selector and current range */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>Show:</span>
+              <select
+                value={itemsPerPage}
+                onChange={handleItemsPerPageChange}
+                style={{
+                  padding: '0.375rem 0.75rem',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '4px',
+                  fontSize: '0.875rem',
+                  backgroundColor: 'white',
+                  cursor: 'pointer'
+                }}
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+              <span style={{ fontSize: '0.875rem', color: '#6b7280' }}>per page</span>
+            </div>
+            
+            <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+              Showing <span style={{ fontWeight: 600, color: '#1f2937' }}>
+                {((currentPage - 1) * itemsPerPage) + 1}
+              </span> to <span style={{ fontWeight: 600, color: '#1f2937' }}>
+                {Math.min(currentPage * itemsPerPage, filteredPatients.length)}
+              </span> of <span style={{ fontWeight: 600, color: '#1f2937' }}>
+                {filteredPatients.length}
+              </span> patients
+            </div>
+          </div>
+          
+          {/* Right side: Page navigation */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            {/* Previous button */}
+            <button
+              onClick={() => handlePageChange(currentPage - 1)}
+              disabled={currentPage === 1}
+              style={{
+                padding: '0.5rem 0.75rem',
+                backgroundColor: currentPage === 1 ? '#f3f4f6' : '#3b82f6',
+                color: currentPage === 1 ? '#9ca3af' : 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+                fontSize: '0.875rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                opacity: currentPage === 1 ? 0.6 : 1
+              }}
+            >
+              ← Previous
+            </button>
+            
+            {/* Page numbers */}
+            <div style={{ display: 'flex', gap: '0.25rem' }}>
+              {getPageNumbers().map((pageNumber, index) => (
+                pageNumber === -1 ? (
+                  <span 
+                    key={`ellipsis-${index}`}
+                    style={{
+                      padding: '0.5rem 0.75rem',
+                      fontSize: '0.875rem',
+                      color: '#6b7280'
+                    }}
+                  >
+                    ...
+                  </span>
+                ) : (
+                  <button
+                    key={pageNumber}
+                    onClick={() => handlePageChange(pageNumber)}
+                    style={{
+                      padding: '0.5rem 0.75rem',
+                      backgroundColor: currentPage === pageNumber ? '#3b82f6' : 'white',
+                      color: currentPage === pageNumber ? 'white' : '#374151',
+                      border: `1px solid ${currentPage === pageNumber ? '#3b82f6' : '#d1d5db'}`,
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '0.875rem',
+                      fontWeight: currentPage === pageNumber ? 600 : 400,
+                      minWidth: '2.5rem'
+                    }}
+                  >
+                    {pageNumber}
+                  </button>
+                )
+              ))}
+            </div>
+            
+            {/* Next button */}
+            <button
+              onClick={() => handlePageChange(currentPage + 1)}
+              disabled={currentPage === totalPages}
+              style={{
+                padding: '0.5rem 0.75rem',
+                backgroundColor: currentPage === totalPages ? '#f3f4f6' : '#3b82f6',
+                color: currentPage === totalPages ? '#9ca3af' : 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+                fontSize: '0.875rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                opacity: currentPage === totalPages ? 0.6 : 1
+              }}
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+      )}
+      
+      <style>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+        
+        select:focus {
+          outline: 2px solid #3b82f6;
+          outline-offset: 2px;
+        }
+      `}</style>
     </div>
   );
 };
 
-const spinnerStyle = document.createElement('style');
-spinnerStyle.textContent = `
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-  }
-`;
-document.head.appendChild(spinnerStyle);
-
 export default PatientListing;
-

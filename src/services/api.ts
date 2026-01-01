@@ -1,13 +1,23 @@
 import axios from 'axios';
 
 /*
-API Configuration File
+Centralized API configuration and service definitions for all backend interactions.
 
-This file sets up the base API configuration and defines all API endpoints
-for the Patient Management System. It uses Axios for HTTP requests and
-organizes endpoints by resource type (patients, assessments, vitals).
+Axios Configuration:
+   - Base URL setup for local development
+   - Request/Response interceptors for debugging
+   - Consistent headers and error handling
 
-BASE URL: http://localhost:8000/api (Django REST Framework backend)
+API Services:
+   - Patient API: CRUD operations for patient management
+   - Assessment API: Overweight and general assessment endpoints
+   - Vitals API: Vital signs recording and retrieval
+
+Endpoint Organization:
+   - Logical grouping by domain (patients, assessments, vitals)
+   - Consistent parameter naming
+   - Clear separation of concerns
+
 */
 
 const API_BASE_URL = 'http://localhost:8000/api';
@@ -19,63 +29,73 @@ const api = axios.create({
   },
 });
 
-/*
-Patient API Endpoints
-CRUD operations for patient management
-Base endpoint: /api/patients/
-*/
+api.interceptors.request.use(
+  (config) => {
+    console.log('API Request:', {
+      url: config.url,
+      method: config.method,
+      data: config.data,
+      params: config.params,
+    });
+    return config;
+  },
+  (error) => {
+    console.error('API Request Error:', error);
+    return Promise.reject(error);
+  }
+);
+
+api.interceptors.response.use(
+  (response) => {
+    console.log('API Response:', {
+      url: response.config.url,
+      status: response.status,
+      data: response.data,
+    });
+    return response;
+  },
+  (error) => {
+    console.error('API Response Error:', {
+      url: error.config?.url,
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message,
+    });
+    return Promise.reject(error);
+  }
+);
+
 export const patientApi = {
   getPatients: () => api.get('/patients/'),
-  
   createPatient: (data: any) => api.post('/patients/', data),
-  
   getPatient: (id: string) => api.get(`/patients/${id}/`),
-  
   updatePatient: (id: string, data: any) => api.put(`/patients/${id}/`, data),
-  
   deletePatient: (id: string) => api.delete(`/patients/${id}/`),
+  getPatientByPatientId: (patientId: string) => 
+    api.get('/patients/', { params: { patient_id: patientId } }),
+  
+  getPatientWithDetails: (id: string) => 
+    api.get(`/patients/${id}/with-details/`),
 };
 
-/*
-Assessment API Endpoints
-Two types of assessments with separate endpoints:
-1. Overweight Assessment - For patients with BMI > 25
-2. General Assessment - For patients with BMI ≤ 25
-*/
-
 export const assessmentApi = {
-  /*
-  Overweight Assessment Endpoints
-  Base endpoint: /api/overweight-assessments/
-  */
-  
   createOverweightAssessment: (data: any) => 
     api.post('/overweight-assessments/', data),
   
   getPatientOverweightAssessments: (patientId: string) => 
-    api.get(`/overweight-assessments/?patient=${patientId}`),
+    api.get(`/overweight-assessments/`, { params: { patient: patientId } }),
   
   getAllOverweightAssessments: () => 
     api.get('/overweight-assessments/'),
-  
-  /*
-  General Assessment Endpoints
-  Base endpoint: /api/general-assessments/
-  */
   
   createGeneralAssessment: (data: any) => 
     api.post('/general-assessments/', data),
   
   getPatientGeneralAssessments: (patientId: string) => 
-    api.get(`/general-assessments/?patient=${patientId}`),
+    api.get(`/general-assessments/`, { params: { patient: patientId } }),
   
   getAllGeneralAssessments: () => 
     api.get('/general-assessments/'),
-  
-  /*
-  Common Assessment Methods
-  Used for operations that work for both assessment types
-  */
   
   getAssessment: (id: string, type: 'overweight' | 'general') => 
     api.get(`/${type}-assessments/${id}/`),
@@ -87,15 +107,14 @@ export const assessmentApi = {
     api.delete(`/${type}-assessments/${id}/`),
 };
 
-/*
-Vitals API Endpoints
-CRUD operations for patient vital signs (height, weight, BMI)
-Base endpoint: /api/vitals/
-*/
 export const vitalsApi = {
   createVitals: (data: any) => api.post('/vitals/', data),
   
-  getVitals: (patientId: string) => api.get(`/vitals/?patient=${patientId}`),
+  getVitals: (patientId: string) => 
+    api.get(`/vitals/`, { params: { patient: patientId } }),
+  
+  getVitalsByPatientId: (patientId: string) =>
+    api.get(`/vitals/`, { params: { patient_id: patientId } }),
   
   getVital: (id: string) => api.get(`/vitals/${id}/`),
   

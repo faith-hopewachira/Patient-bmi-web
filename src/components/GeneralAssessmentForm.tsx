@@ -2,22 +2,35 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { assessmentApi } from '../services/api';
 
+
 /*
-GeneralAssessmentForm Component
+The general assessing form is for assessing patients with normal or underweight BMI (BMI ≤ 25) with health and drug use questions.
 
-This form is specifically for patients with BMI ≤ 25 (underweight and normal weight).
-It collects general health information including current drug usage and general health status.
+Eligibility Check:
+   - Only accessible for patients with BMI ≤ 25
+   - Blocks overweight patients (redirects them)
 
-Workflow Trigger: This form is only accessible from the VitalsForm 
-when BMI calculation results in BMI ≤ 25.
+Health Assessment:
+   - General health status (Good/Poor)
+   - Current drug usage status
+   - Comments field
 
-Key Features:
-1. BMI-based access restriction (only BMI ≤ 25 patients)
-2. Duplicate date validation to prevent multiple assessments on same date
-3. Collects drug usage information for health monitoring
-4. Navigates to PatientListing upon successful submission
+Duplicate Prevention:
+   - Checks existing assessment dates
+   - Prevents multiple assessments on same date
 
-Data Flow: VitalsForm (BMI ≤ 25) → GeneralAssessmentForm → PatientListing
+BMI Status Calculation:
+   - Dynamically calculates BMI category
+   - Displays appropriate status (Underweight/Normal)
+
+KEY FLOW:
+1. Receives patient data and BMI from vitals form
+2. Calculates BMI status (Underweight/Normal)
+3. Fetches existing assessment dates
+4. Validates form inputs
+5. Submits assessment to API
+6. Returns to patient details page
+
 */
 
 interface GeneralAssessmentData {
@@ -41,15 +54,17 @@ const GeneralAssessmentForm: React.FC = () => {
   });
   
   const [existingDates, setExistingDates] = useState<string[]>([]);
-  
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  /*
-  Effect: Fetch existing general assessment dates for the patient
-  Purpose: Prevent duplicate assessments on the same date
-  Trigger: Runs when patient data changes (on component mount)
-  */
+  const getBmiStatusText = (bmiValue: number): string => {
+    if (bmiValue < 18.5) return 'Underweight';
+    if (bmiValue < 25) return 'Normal';
+    return 'Overweight';
+  };
+
+  const displayBmiStatus = bmi !== undefined ? getBmiStatusText(bmi) : bmiStatus;
+
   useEffect(() => {
     const fetchExistingAssessments = async () => {
       if (!patient?.id) return;
@@ -88,28 +103,29 @@ const GeneralAssessmentForm: React.FC = () => {
     fetchExistingAssessments();
   }, [patient]);
 
-  /*
-  Function: Handle form submission
-  Purpose: Validate and submit general assessment data to API
-  Steps:
-    1. Validate patient data exists
-    2. Validate all required fields are filled
-    3. Check for duplicate assessment dates
-    4. Submit data to API
-    5. Navigate to PatientListing on success
-    6. Handle errors with user-friendly messages
-  */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    
+    console.log('Form data before submission:', formData);
     
     if (!patient?.id) {
       setError('Patient data not found');
       return;
     }
     
-    if (!formData.visit_date || !formData.general_health || !formData.using_drugs) {
-      setError('All fields are mandatory');
+    if (!formData.visit_date) {
+      setError('Visit date is required');
+      return;
+    }
+    
+    if (!formData.general_health) {
+      setError('General health assessment is required');
+      return;
+    }
+    
+    if (!formData.using_drugs) {
+      setError('Please specify if the patient is using any drugs');
       return;
     }
     
@@ -124,9 +140,9 @@ const GeneralAssessmentForm: React.FC = () => {
       const assessmentData = {
         patient_id: patient.id,          
         visit_date: formData.visit_date,
-        general_health: formData.general_health,
-        using_drugs: formData.using_drugs,
-        comments: formData.comments || '',
+        general_health: formData.general_health.trim(),
+        using_drugs: formData.using_drugs.trim(),
+        comments: formData.comments ? formData.comments.trim() : '',
       };
       
       console.log('Submitting general assessment:', assessmentData);
@@ -134,22 +150,33 @@ const GeneralAssessmentForm: React.FC = () => {
       const response = await assessmentApi.createGeneralAssessment(assessmentData);
       console.log('General assessment saved:', response.data);
       
-      navigate('/patient-listing');
+      navigate('/patient-details', { 
+        state: { 
+          patient: patient,
+          forceRefresh: true 
+        } 
+      });
       
     } catch (err: any) {
       console.error('Error saving assessment:', err);
       
-      setError(err.response?.data?.detail || 'Failed to save assessment');
+      let errorMsg = 'Failed to save assessment';
+      if (err.response?.data) {
+        if (typeof err.response.data === 'object') {
+          errorMsg = Object.entries(err.response.data)
+            .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
+            .join('. ');
+        } else {
+          errorMsg = err.response.data;
+        }
+      }
+      
+      setError(errorMsg);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  /*
-  Function: Handle input changes
-  Purpose: Update form state when user interacts with form elements
-  Parameters: e - change event from input/textarea/select elements
-  */
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({
@@ -158,11 +185,6 @@ const GeneralAssessmentForm: React.FC = () => {
     }));
   };
 
-  /*
-  Component: Missing Data State
-  Purpose: Display when patient data is not found (user navigated directly)
-  Action: Provides button to go to PatientListing
-  */
   if (!patient || bmi === undefined) {
     return (
       <div style={{ textAlign: 'center', padding: '4rem' }}>
@@ -185,18 +207,13 @@ const GeneralAssessmentForm: React.FC = () => {
     );
   }
 
-  /*
-  Component: Access Control State
-  Purpose: Restrict access to patients with BMI ≤ 25 only
-  Logic: This form should only be accessible for underweight and normal weight patients
-         If BMI > 25, show access denied message
-  */
-  if (bmi > 25) {
+  const calculatedStatus = getBmiStatusText(bmi);
+  if (calculatedStatus === 'Overweight') {
     return (
       <div style={{ textAlign: 'center', padding: '4rem' }}>
         <h2>Access Denied</h2>
         <p>General Assessment Form is only available for patients with BMI ≤ 25.</p>
-        <p>This patient's BMI is {bmi} ({bmiStatus}).</p>
+        <p>This patient's BMI is {bmi} ({calculatedStatus}).</p>
         <button 
           onClick={() => navigate('/patient-listing')}
           style={{
@@ -226,7 +243,7 @@ const GeneralAssessmentForm: React.FC = () => {
         marginBottom: '1.5rem'
       }}>
         <p><strong>Patient:</strong> {patient.first_name} {patient.last_name}</p>
-        <p><strong>BMI:</strong> {bmi} ({bmiStatus})</p>
+        <p><strong>BMI:</strong> {bmi} ({displayBmiStatus})</p>
         {existingDates.length > 0 && (
           <p style={{ color: '#6b7280', fontSize: '0.875rem', marginTop: '0.5rem' }}>
             This patient has {existingDates.length} previous general assessment(s)
@@ -242,7 +259,7 @@ const GeneralAssessmentForm: React.FC = () => {
           borderRadius: '8px',
           marginBottom: '1.5rem'
         }}>
-          {error}
+          <strong>Error:</strong> {error}
         </div>
       )}
       
@@ -367,7 +384,7 @@ const GeneralAssessmentForm: React.FC = () => {
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
           <button
             type="button"
-            onClick={() => navigate(-1)}
+            onClick={() => navigate('/patient-listing')}
             style={{
               padding: '0.75rem 1.5rem',
               background: '#6b7280',
@@ -393,7 +410,7 @@ const GeneralAssessmentForm: React.FC = () => {
               opacity: (isSubmitting || existingDates.includes(formData.visit_date)) ? 0.7 : 1
             }}
           >
-            {isSubmitting ? 'Saving...' : 'Save & Go to Patient Listing'}
+            {isSubmitting ? 'Saving...' : 'Save Assessment'}
           </button>
         </div>
       </form>

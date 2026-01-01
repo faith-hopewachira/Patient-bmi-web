@@ -2,20 +2,36 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { assessmentApi } from '../services/api';
 
+
 /*
-OverweightAssessmentForm Component
+The overweight assesement form is for assessing overweight patients (BMI > 25) with specific health and diet questions.
 
-This form is specifically for patients with BMI > 25 (overweight).
-It collects additional health information relevant to overweight patients,
-including diet history and general health assessment.
+Eligibility Check:
+   - Only accessible for patients with BMI > 25
+   - Redirects users if BMI is 25 or lower
 
-Key Features:
-1. BMI-based access restriction (only BMI > 25 patients)
-2. Duplicate date validation to prevent multiple assessments on same date
-3. Collects diet history information specific to overweight patients
-4. Navigates to PatientListing upon successful submission
+Assessment Questions:
+   - General health status (Good/Poor)
+   - Diet history for weight loss
+   - Comments field
 
-Data Flow: VitalsForm (BMI > 25) → OverweightAssessmentForm → PatientListing
+Duplicate Prevention:
+   - Checks for existing assessments by date
+   - Prevents duplicate entries for same visit date
+
+Data Management:
+   - Validates all required fields
+   - Saves assessment to API
+   - Navigates back to patient details on success
+
+KEY FLOW:
+1. Receives patient data and BMI from vitals form
+2. Verifies patient eligibility (BMI > 25)
+3. Fetches existing assessment dates
+4. Validates form inputs
+5. Submits assessment data
+6. Returns to patient details page
+
 */
 
 interface OverweightAssessmentData {
@@ -39,15 +55,9 @@ const OverweightAssessmentForm: React.FC = () => {
   });
   
   const [existingDates, setExistingDates] = useState<string[]>([]);
-  
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  /*
-  Effect: Fetch existing overweight assessment dates for the patient
-  Purpose: Prevent duplicate assessments on the same date
-  Trigger: Runs when patient data changes (on component mount)
-  */
   useEffect(() => {
     const fetchExistingAssessments = async () => {
       if (!patient?.id) return;
@@ -86,28 +96,29 @@ const OverweightAssessmentForm: React.FC = () => {
     fetchExistingAssessments();
   }, [patient]);
 
-  /*
-  Function: Handle form submission
-  Purpose: Validate and submit overweight assessment data to API
-  Steps:
-    1. Validate patient data exists
-    2. Validate all required fields are filled
-    3. Check for duplicate assessment dates
-    4. Submit data to API
-    5. Navigate to PatientListing on success
-    6. Handle errors with user-friendly messages
-  */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    
+    console.log('Form data before submission:', formData);
     
     if (!patient?.id) {
       setError('Patient data not found');
       return;
     }
     
-    if (!formData.visit_date || !formData.general_health || !formData.been_on_diet) {
-      setError('All fields are mandatory');
+    if (!formData.visit_date) {
+      setError('Visit date is required');
+      return;
+    }
+    
+    if (!formData.general_health) {
+      setError('General health assessment is required');
+      return;
+    }
+    
+    if (!formData.been_on_diet) {
+      setError('Please specify if the patient has been on a diet');
       return;
     }
     
@@ -122,9 +133,9 @@ const OverweightAssessmentForm: React.FC = () => {
       const assessmentData = {
         patient_id: patient.id,           
         visit_date: formData.visit_date,  
-        general_health: formData.general_health, 
-        been_on_diet: formData.been_on_diet,     
-        comments: formData.comments || '',      
+        general_health: formData.general_health.trim(), 
+        been_on_diet: formData.been_on_diet.trim(),     
+        comments: formData.comments ? formData.comments.trim() : '',      
       };
       
       console.log('Submitting overweight assessment:', assessmentData);
@@ -132,22 +143,33 @@ const OverweightAssessmentForm: React.FC = () => {
       const response = await assessmentApi.createOverweightAssessment(assessmentData);
       console.log('Overweight assessment saved:', response.data);
       
-      navigate('/patient-listing');
+      navigate('/patient-details', { 
+        state: { 
+          patient: patient,
+          forceRefresh: true 
+        } 
+      });
       
     } catch (err: any) {
       console.error('Error saving assessment:', err);
       
-      setError(err.response?.data?.detail || 'Failed to save assessment');
+      let errorMsg = 'Failed to save assessment';
+      if (err.response?.data) {
+        if (typeof err.response.data === 'object') {
+          errorMsg = Object.entries(err.response.data)
+            .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
+            .join('. ');
+        } else {
+          errorMsg = err.response.data;
+        }
+      }
+      
+      setError(errorMsg);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  /*
-  Function: Handle input changes
-  Purpose: Update form state when user interacts with form elements
-  Parameters: e - change event from input/textarea/select elements
-  */
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({
@@ -156,11 +178,6 @@ const OverweightAssessmentForm: React.FC = () => {
     }));
   };
 
-  /*
-  Component: Missing Data State
-  Purpose: Display when patient data is not found (user navigated directly)
-  Action: Provides button to go to PatientListing
-  */
   if (!patient || bmi === undefined) {
     return (
       <div style={{ textAlign: 'center', padding: '4rem' }}>
@@ -183,18 +200,12 @@ const OverweightAssessmentForm: React.FC = () => {
     );
   }
 
-  /*
-  Component: Access Control State
-  Purpose: Restrict access to patients with BMI > 25 only
-  Logic: This form should only be accessible for overweight patients
-         If BMI ≤ 25, show access denied message
-  */
   if (bmi <= 25) {
     return (
       <div style={{ textAlign: 'center', padding: '4rem' }}>
         <h2>Access Denied</h2>
         <p>Overweight Assessment Form is only available for patients with BMI &gt; 25.</p>
-        <p>This patient's BMI is {bmi} ({bmiStatus}).</p>
+        <p>This patient's BMI is {bmi.toFixed(1)} ({bmiStatus}).</p>
         <button 
           onClick={() => navigate('/patient-listing')}
           style={{
@@ -224,8 +235,7 @@ const OverweightAssessmentForm: React.FC = () => {
         marginBottom: '1.5rem'
       }}>
         <p><strong>Patient:</strong> {patient.first_name} {patient.last_name}</p>
-        <p><strong>Patient ID:</strong> {patient.patient_id}</p>
-        <p><strong>BMI:</strong> {bmi} ({bmiStatus})</p>
+        <p><strong>BMI:</strong> {bmi.toFixed(1)} ({bmiStatus})</p>
         {existingDates.length > 0 && (
           <p style={{ color: '#6b7280', fontSize: '0.875rem', marginTop: '0.5rem' }}>
             This patient has {existingDates.length} previous overweight assessment(s)
@@ -241,7 +251,7 @@ const OverweightAssessmentForm: React.FC = () => {
           borderRadius: '8px',
           marginBottom: '1.5rem'
         }}>
-          {error}
+          <strong>Error:</strong> {error}
         </div>
       )}
       
@@ -366,7 +376,7 @@ const OverweightAssessmentForm: React.FC = () => {
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
           <button
             type="button"
-            onClick={() => navigate(-1)}
+            onClick={() => navigate('/patient-listing')}
             style={{
               padding: '0.75rem 1.5rem',
               background: '#6b7280',
@@ -392,7 +402,7 @@ const OverweightAssessmentForm: React.FC = () => {
               opacity: (isSubmitting || existingDates.includes(formData.visit_date)) ? 0.7 : 1
             }}
           >
-            {isSubmitting ? 'Saving...' : 'Save & Go to Patient Listing'}
+            {isSubmitting ? 'Saving...' : 'Save Assessment'}
           </button>
         </div>
       </form>
