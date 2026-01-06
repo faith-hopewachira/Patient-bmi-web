@@ -143,12 +143,7 @@ const OverweightAssessmentForm: React.FC = () => {
       const response = await assessmentApi.createOverweightAssessment(assessmentData);
       console.log('Overweight assessment saved:', response.data);
       
-      navigate('/patient-details', { 
-        state: { 
-          patient: patient,
-          forceRefresh: true 
-        } 
-      });
+      navigate('/patient-listing');
       
     } catch (err: any) {
       console.error('Error saving assessment:', err);

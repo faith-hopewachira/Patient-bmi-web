@@ -25,7 +25,6 @@ NAVIGATION AND ACTIONS:
 
 */
 
-
 interface Patient {
   id: string;
   patient_id: string;
@@ -54,8 +53,8 @@ interface AssessmentRecord {
   visit_date: string;
   type: 'general' | 'overweight';
   general_health?: string;
-  using_drugs?: string;
-  been_on_diet?: string;
+  using_drugs?: string | boolean;
+  been_on_diet?: boolean | string;
   comments?: string;
   created_at: string;
 }
@@ -133,8 +132,8 @@ const PatientDetails: React.FC = () => {
         const overweightArray = extractArrayFromResponse(overweightResponse.data);
         const generalArray = extractArrayFromResponse(generalResponse.data);
         
-        console.log('Overweight assessments:', overweightArray);
-        console.log('General assessments:', generalArray);
+        console.log('Overweight assessments raw data:', overweightArray);
+        console.log('General assessments raw data:', generalArray);
         
         const allAssessments: AssessmentRecord[] = [
           ...overweightArray.map((a: any) => ({
@@ -143,7 +142,7 @@ const PatientDetails: React.FC = () => {
             visit_date: a.visit_date || a.created_at,
             type: 'overweight' as const,
             general_health: a.general_health,
-            been_on_diet: a.been_on_diet,
+            been_on_diet: a.diet_history !== undefined ? a.diet_history : a.been_on_diet,
             comments: a.comments,
             created_at: a.created_at
           })),
@@ -153,7 +152,11 @@ const PatientDetails: React.FC = () => {
             visit_date: a.visit_date || a.created_at,
             type: 'general' as const,
             general_health: a.general_health,
-            using_drugs: a.using_drugs,
+            using_drugs: a.currently_using_drugs !== undefined ? 
+              (typeof a.currently_using_drugs === 'boolean' ? 
+                (a.currently_using_drugs ? 'Yes' : 'No') : 
+                a.currently_using_drugs) : 
+              a.using_drugs,
             comments: a.comments,
             created_at: a.created_at
           }))
@@ -246,6 +249,38 @@ const PatientDetails: React.FC = () => {
     }
   };
   
+  const formatDietHistory = (dietHistory: boolean | string | undefined): string => {
+    if (dietHistory === undefined) return 'Not specified';
+    
+    if (typeof dietHistory === 'boolean') {
+      return dietHistory ? 'Yes' : 'No';
+    }
+    
+    if (typeof dietHistory === 'string') {
+      if (dietHistory.toLowerCase() === 'true' || dietHistory === 'Yes') return 'Yes';
+      if (dietHistory.toLowerCase() === 'false' || dietHistory === 'No') return 'No';
+      return dietHistory;
+    }
+    
+    return 'Not specified';
+  };
+  
+  const formatDrugUsage = (drugUsage: string | boolean | undefined): string => {
+    if (drugUsage === undefined) return 'Not specified';
+    
+    if (typeof drugUsage === 'boolean') {
+      return drugUsage ? 'Yes' : 'No';
+    }
+    
+    if (typeof drugUsage === 'string') {
+      if (drugUsage.toLowerCase() === 'true' || drugUsage === 'Yes') return 'Yes';
+      if (drugUsage.toLowerCase() === 'false' || drugUsage === 'No') return 'No';
+      return drugUsage;
+    }
+    
+    return 'Not specified';
+  };
+  
   const formatGender = (gender: string = ''): string => {
     if (!gender) return 'Unknown';
     switch (gender.toUpperCase()) {
@@ -314,7 +349,7 @@ const PatientDetails: React.FC = () => {
           patient_id: patient.id,
           visit_date: newAssessment.visit_date,
           general_health: newAssessment.general_health,
-          been_on_diet: newAssessment.been_on_diet,
+          diet_history: newAssessment.been_on_diet === 'Yes' || newAssessment.been_on_diet === 'true',
           comments: newAssessment.comments,
         };
         
@@ -328,7 +363,7 @@ const PatientDetails: React.FC = () => {
           patient_id: patient.id,
           visit_date: newAssessment.visit_date,
           general_health: newAssessment.general_health,
-          using_drugs: newAssessment.using_drugs,
+          currently_using_drugs: newAssessment.using_drugs === 'Yes' || newAssessment.using_drugs === 'true',
           comments: newAssessment.comments,
         };
         
@@ -752,12 +787,12 @@ const PatientDetails: React.FC = () => {
                       </div>
                       <div>
                         <p style={{ fontSize: '0.875rem', color: '#6b7280' }}>
-                          {assessmentsHistory[0].type === 'overweight' ? 'Diet History' : 'Currently Using Drugs'}
+                          {assessmentsHistory[0].type === 'overweight' ? 'Has been on diet before' : 'Currently Using Drugs'}
                         </p>
                         <p style={{ fontWeight: 500 }}>
                           {assessmentsHistory[0].type === 'overweight' 
-                            ? (assessmentsHistory[0].been_on_diet || 'Not specified')
-                            : (assessmentsHistory[0].using_drugs || 'Not specified')}
+                            ? formatDietHistory(assessmentsHistory[0].been_on_diet)
+                            : formatDrugUsage(assessmentsHistory[0].using_drugs)}
                         </p>
                       </div>
                     </div>

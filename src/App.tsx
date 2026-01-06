@@ -27,7 +27,7 @@ const App: React.FC = () => {
     <Router>
       <div className="container">
         <Routes>
-          <Route path="/" element={<PatientRegistration />} />
+          <Route path="/" element={<Navigate to="/patient-listing" replace />} />
           
           <Route path="/register-patient" element={<PatientRegistration />} />
           
@@ -39,9 +39,9 @@ const App: React.FC = () => {
           
           <Route path="/patient-listing" element={<PatientListing />} />
           
-          <Route path="/patient-details" element={<PatientDetails />} /> {/* Add this route */}
+          <Route path="/patient-details" element={<PatientDetails />} />
           
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<Navigate to="/patient-listing" replace />} />
         </Routes>
       </div>
     </Router>

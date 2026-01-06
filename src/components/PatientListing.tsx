@@ -790,16 +790,6 @@ const PatientListing: React.FC = () => {
                           color: '#111827'
                         }}>
                           {patient.first_name} {patient.last_name}
-                          <span style={{ 
-                            fontSize: '0.75rem', 
-                            color: '#3b82f6',
-                            marginLeft: '0.5rem',
-                            backgroundColor: '#eff6ff',
-                            padding: '0.125rem 0.375rem',
-                            borderRadius: '4px'
-                          }}>
-                            ID: {patient.patient_id}
-                          </span>
                         </div>
                         {patient.date_of_birth && (
                           <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.25rem' }}>
