@@ -2,42 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { vitalsApi, patientApi } from '../services/api';
 
-/*
-The Vitals form is for recording patient vitals (height, weight, BMI) with automatic routing to the appropriate 
-assessment form based on BMI calculation.
-
-Patient Verification: 
-   - Searches for correct patient UUID using patient_id (PAT001)
-   - Validates patient exists in system before allowing vitals entry
-
-Vitals Recording:
-   - Captures height, weight, and calculates BMI automatically
-   - Prevents duplicate entries for same date
-   - Validates data ranges and future dates
-
-Smart Routing:
-   - Routes to General Assessment form if BMI ≤ 25
-   - Routes to Overweight Assessment form if BMI > 25
-   - Includes calculated BMI data in navigation state
-
-Data Display:
-   - Shows patient information and previous vitals records
-   - Color-coded BMI status indicators
-   - Form validation with user feedback
-
-KEY FLOW:
-1. Receive patient data from navigation state
-2. Search for patient's real UUID in database
-3. Fetch existing vitals to prevent duplicates
-4. Calculate BMI from height/weight inputs
-5. Save vitals to API
-6. Navigate to appropriate assessment form based on BMI
-
-*/
-
 interface PatientData {
   id: string;
   patient_id: string;
+  patient_number?: string;
   first_name: string;
   last_name: string;
 }
@@ -56,51 +24,6 @@ const isValidUUID = (str: string): boolean => {
   if (!str) return false;
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   return uuidRegex.test(str);
-};
-
-const extractArrayFromResponse = (data: any): any[] => {
-  console.log('Extracting array from:', data);
-  
-  if (Array.isArray(data)) {
-    console.log('Response is already an array');
-    return data;
-  }
-  
-  if (data?.results && Array.isArray(data.results)) {
-    console.log('Found array in results field');
-    return data.results;
-  }
-  
-  if (data?.data && Array.isArray(data.data)) {
-    console.log('Found array in data field');
-    return data.data;
-  }
-  
-  if (typeof data === 'object' && data !== null) {
-    const values = Object.values(data);
-    
-    for (const value of values) {
-      if (Array.isArray(value)) {
-        console.log('Found array in object values');
-        return value;
-      }
-    }
-    
-    for (const value of values) {
-      if (typeof value === 'object' && value !== null) {
-        const nestedValues = Object.values(value);
-        for (const nestedValue of nestedValues) {
-          if (Array.isArray(nestedValue)) {
-            console.log('Found array in nested object');
-            return nestedValue;
-          }
-        }
-      }
-    }
-  }
-  
-  console.log('No array found in response, returning empty array');
-  return [];
 };
 
 const getTodayDate = (): string => {
@@ -127,7 +50,7 @@ const VitalsForm: React.FC = () => {
   const { patient: locationPatient, redirectBack } = location.state || {};
   
   const [loading, setLoading] = useState(false);
-  const [patient, setPatient] = useState<PatientData | null>(locationPatient);
+  const [patient, setPatient] = useState<PatientData | null>(null);
   const [patientUUID, setPatientUUID] = useState<string>('');
   const [existingVitals, setExistingVitals] = useState<VitalsRecord[]>([]);
   const [existingDates, setExistingDates] = useState<string[]>([]);
@@ -147,15 +70,6 @@ const VitalsForm: React.FC = () => {
   });
 
   useEffect(() => {
-    console.log('=== LOCATION PATIENT DATA ===');
-    console.log('Location patient:', locationPatient);
-    console.log('Location patient id:', locationPatient?.id);
-    console.log('Location patient patient_id:', locationPatient?.patient_id);
-    console.log('Is location patient.id a UUID?', isValidUUID(locationPatient?.id || ''));
-    console.log('Today\'s date:', getTodayDate());
-  }, [locationPatient]);
-
-  useEffect(() => {
     const fetchRealPatientData = async () => {
       if (!locationPatient) {
         console.error('No patient data provided');
@@ -165,171 +79,59 @@ const VitalsForm: React.FC = () => {
       
       try {
         setLoading(true);
-        console.log('=== FIXED SOLUTION: Getting real patient data ===');
         
-        console.log(`1. Looking for patient with patient_id: ${locationPatient.patient_id}`);
+        console.log('Location patient data:', locationPatient);
         
-        try {
-          console.log('Trying to fetch patients with patient_id query parameter...');
-          const response = await patientApi.getPatientByPatientId(locationPatient.patient_id);
-          console.log('API response for patient search:', response.data);
-          
-          const patientsArray = extractArrayFromResponse(response.data);
-          console.log(`Found ${patientsArray.length} patients with patient_id: ${locationPatient.patient_id}`);
-          
-          if (patientsArray.length > 0) {
-            const foundPatient = patientsArray[0];
-            console.log('✅ Found patient via patient_id query:', foundPatient);
-            console.log('Patient id (UUID):', foundPatient.id);
-            console.log('Patient patient_id:', foundPatient.patient_id);
+        if (locationPatient.id && isValidUUID(locationPatient.id)) {
+          try {
+            console.log('Fetching patient data from API with ID:', locationPatient.id);
+            const response = await patientApi.getPatient(locationPatient.id);
+            const apiPatient = response.data;
             
-            setPatient(foundPatient);
-            if (isValidUUID(foundPatient.id)) {
-              setPatientUUID(foundPatient.id);
-              console.log('✅ Using UUID:', foundPatient.id);
-            } else {
-              console.warn('⚠️ Patient ID is not a UUID:', foundPatient.id);
-              if (isValidUUID(foundPatient.patient_id)) {
-                setPatientUUID(foundPatient.patient_id);
-                console.log('✅ Using patient_id as UUID:', foundPatient.patient_id);
-              }
-            }
+            console.log('API Patient data:', apiPatient);
+            
+            const fetchedPatient: PatientData = {
+              id: apiPatient.id,
+              patient_id: apiPatient.patient_id || '',
+              patient_number: apiPatient.patient_number || '',
+              first_name: apiPatient.first_name,
+              last_name: apiPatient.last_name
+            };
+            
+            console.log('Fetched patient:', fetchedPatient);
+            
+            setPatient(fetchedPatient);
+            setPatientUUID(apiPatient.id);
             return;
+            
+          } catch (error) {
+            console.log('Failed to fetch patient from API, using location data:', error);
           }
-        } catch (directError) {
-          console.log('Direct patient_id query failed:', directError);
         }
         
-        console.log('2. Getting all patients from API for search...');
-        const allPatientsResponse = await patientApi.getPatients();
-        console.log('All patients response structure:', {
-          count: allPatientsResponse.data?.count,
-          hasResults: !!allPatientsResponse.data?.results,
-          hasData: !!allPatientsResponse.data?.data,
-          isArray: Array.isArray(allPatientsResponse.data)
-        });
-        
-        const allPatientsArray = extractArrayFromResponse(allPatientsResponse.data);
-        console.log('Extracted patients array length:', allPatientsArray.length);
-        
-        if (allPatientsArray.length === 0) {
-          console.error('No patients found in API response');
-          setErrors(prev => ({ ...prev, patient: 'No patients found in system' }));
-          return;
-        }
-        
-        console.log('First 3 patients structure:');
-        for (let i = 0; i < Math.min(3, allPatientsArray.length); i++) {
-          const p = allPatientsArray[i];
-          console.log(`Patient ${i + 1}:`, {
-            id: p.id,
-            patient_id: p.patient_id,
-            display_id: p.display_id,
-            medical_record_number: p.medical_record_number,
-            first_name: p.first_name,
-            last_name: p.last_name,
-            isIdUUID: isValidUUID(p.id),
-            isPatientIdUUID: isValidUUID(p.patient_id)
-          });
-        }
-        
-        const patientIdToFind = locationPatient.patient_id;
-        console.log(`\n3. Searching for patient with patient_id: "${patientIdToFind}"`);
-        
-        const foundPatient = allPatientsArray.find(p => {
-          if (p.patient_id === patientIdToFind) {
-            console.log(`Found match by patient_id: ${p.patient_id}`);
-            return true;
-          }
+        if (locationPatient && locationPatient.first_name) {
+          console.log('Using location patient data as fallback');
           
-          if (p.display_id === patientIdToFind) {
-            console.log(`Found match by display_id: ${p.display_id}`);
-            return true;
-          }
+          const patientFromLocation: PatientData = {
+            id: locationPatient.id || '',
+            patient_id: locationPatient.patient_id || '',
+            patient_number: locationPatient.patient_number || locationPatient.patient_id || '',
+            first_name: locationPatient.first_name,
+            last_name: locationPatient.last_name
+          };
           
-          if (p.medical_record_number === patientIdToFind) {
-            console.log(`Found match by medical_record_number: ${p.medical_record_number}`);
-            return true;
-          }
+          console.log('Patient from location:', patientFromLocation);
           
-          if (p.id === locationPatient.id) {
-            console.log(`Found match by id: ${p.id}`);
-            return true;
-          }
+          setPatient(patientFromLocation);
           
-          return false;
-        });
-        
-        if (foundPatient) {
-          console.log('✅ Found patient:', {
-            id: foundPatient.id,
-            patient_id: foundPatient.patient_id,
-            name: `${foundPatient.first_name} ${foundPatient.last_name}`
-          });
-          console.log('Is found patient.id a UUID?', isValidUUID(foundPatient.id));
-          
-          setPatient(foundPatient);
-          
-          if (isValidUUID(foundPatient.id)) {
-            setPatientUUID(foundPatient.id);
-            console.log('✅ Using UUID from found patient:', foundPatient.id);
-          } else {
-            console.error('❌ Found patient but id is not a UUID:', foundPatient.id);
-            console.log('Trying to use patient_id as UUID if it is one...');
-            
-            if (isValidUUID(foundPatient.patient_id)) {
-              setPatientUUID(foundPatient.patient_id);
-              console.log('✅ Using patient_id as UUID:', foundPatient.patient_id);
-            } else {
-              setErrors(prev => ({ ...prev, patient: 'Patient found but ID is not a valid UUID' }));
-            }
-          }
-        } else {
-          console.log(`❌ Patient with patient_id "${patientIdToFind}" not found in patients list`);
-          console.log('Available patient_ids:', allPatientsArray.map(p => p.patient_id).slice(0, 10));
-          
-          console.log('Trying to find by name...');
-          const foundByName = allPatientsArray.find(p => 
-            p.first_name === locationPatient.first_name && 
-            p.last_name === locationPatient.last_name
-          );
-          
-          if (foundByName) {
-            console.log('✅ Found patient by name:', foundByName);
-            setPatient(foundByName);
-            if (isValidUUID(foundByName.id)) {
-              setPatientUUID(foundByName.id);
-            }
-          } else {
-            console.error('❌ Could not find patient by name either');
-            
-            console.log('Trying partial name match...');
-            const partialMatch = allPatientsArray.find(p => 
-              p.first_name?.includes(locationPatient.first_name) || 
-              p.last_name?.includes(locationPatient.last_name)
-            );
-            
-            if (partialMatch) {
-              console.log('✅ Found patient by partial name match:', partialMatch);
-              setPatient(partialMatch);
-              if (isValidUUID(partialMatch.id)) {
-                setPatientUUID(partialMatch.id);
-              }
-            } else {
-              setErrors(prev => ({ 
-                ...prev, 
-                patient: `Patient "${locationPatient.first_name} ${locationPatient.last_name}" (ID: ${patientIdToFind}) not found` 
-              }));
-            }
+          if (isValidUUID(locationPatient.id)) {
+            setPatientUUID(locationPatient.id);
           }
         }
         
       } catch (error) {
         console.error('Error fetching patient data:', error);
         setErrors(prev => ({ ...prev, patient: 'Failed to load patient data' }));
-        
-        console.log('Using location patient as fallback (will likely fail to save)');
-        setPatient(locationPatient);
       } finally {
         setLoading(false);
       }
@@ -346,24 +148,18 @@ const VitalsForm: React.FC = () => {
       }
       
       try {
-        console.log('Fetching existing vitals for UUID:', patientUUID);
+        console.log('Fetching existing vitals for patient:', patientUUID);
         
-        let response;
-        try {
-          response = await vitalsApi.getVitals(patientUUID);
-        } catch (error) {
-          console.log('First attempt failed, trying patient_id param...');
-          response = await vitalsApi.getVitalsByPatientId(patientUUID);
-        }
+        const response = await vitalsApi.getVitals(patientUUID);
+        console.log('Vitals API response:', response.data);
         
-        console.log('Vitals response:', response.data);
-        const vitalsArray = extractArrayFromResponse(response.data);
-        console.log('Extracted vitals array:', vitalsArray);
+        const vitalsArray = response.data?.results || [];
+        console.log('Vitals found:', vitalsArray.length);
         
         const parsedVitals = vitalsArray.map((v: any): VitalsRecord => ({
           id: v.id || '',
-          patient_id: v.patient_id || v.patient || '',
-          visit_date: v.visit_date || v.created_at || '',
+          patient_id: v.patient_id || v.patient || patientUUID,
+          visit_date: v.visit_date || '',
           height_cm: parseFloat(v.height_cm) || 0,
           weight_kg: parseFloat(v.weight_kg) || 0,
           bmi: typeof v.bmi === 'number' ? v.bmi : parseFloat(v.bmi) || 0,
@@ -376,16 +172,15 @@ const VitalsForm: React.FC = () => {
           if (v.visit_date) {
             return new Date(v.visit_date).toISOString().split('T')[0];
           }
-          if (v.created_at) {
-            return new Date(v.created_at).toISOString().split('T')[0];
-          }
           return '';
         }).filter(Boolean);
         
         setExistingDates(dates);
         
+        console.log('Existing vitals dates:', dates);
+        
       } catch (error) {
-        console.error('Error fetching existing vitals:', error);
+        console.error('Error fetching vitals:', error);
       }
     };
     
@@ -407,15 +202,14 @@ const VitalsForm: React.FC = () => {
     if (!patientUUID || !isValidUUID(patientUUID)) {
       newErrors.patient = 'Valid patient UUID is required';
       isValid = false;
-      console.error('Invalid patient UUID:', patientUUID);
     }
     
     const height = parseFloat(formData.height_cm);
     if (!formData.height_cm || isNaN(height)) {
       newErrors.height_cm = 'Please enter a valid height';
       isValid = false;
-    } else if (height < 50 || height > 250) {
-      newErrors.height_cm = 'Height must be between 50cm and 250cm';
+    } else if (height < 50 || height > 300) {
+      newErrors.height_cm = 'Height must be between 50cm and 300cm';
       isValid = false;
     }
     
@@ -423,19 +217,14 @@ const VitalsForm: React.FC = () => {
     if (!formData.weight_kg || isNaN(weight)) {
       newErrors.weight_kg = 'Please enter a valid weight';
       isValid = false;
-    } else if (weight < 2 || weight > 300) {
-      newErrors.weight_kg = 'Weight must be between 2kg and 300kg';
+    } else if (weight < 2 || weight > 500) {
+      newErrors.weight_kg = 'Weight must be between 2kg and 500kg';
       isValid = false;
     }
     
     if (isFutureDate(formData.visit_date)) {
       newErrors.visit_date = 'Visit date cannot be in the future';
       isValid = false;
-      console.log('Date validation failed:', {
-        inputDate: formData.visit_date,
-        today: getTodayDate(),
-        isFuture: isFutureDate(formData.visit_date)
-      });
     }
     
     if (existingDates.includes(formData.visit_date)) {
@@ -483,7 +272,7 @@ const VitalsForm: React.FC = () => {
     
     if (!validateForm()) {
       if (errors.patient) {
-        alert(`Error: ${errors.patient}\n\nThe system cannot find a valid patient ID. Please go back and try again.`);
+        alert(`Error: ${errors.patient}\n\nPlease go back and try again.`);
       }
       return;
     }
@@ -491,10 +280,7 @@ const VitalsForm: React.FC = () => {
     try {
       setLoading(true);
       
-      console.log('=== SUBMITTING VITALS ===');
-      console.log('Patient UUID to send:', patientUUID);
-      console.log('Is valid UUID?', isValidUUID(patientUUID));
-      console.log('Patient:', patient);
+      console.log('Submitting vitals for patient:', patientUUID);
       
       const submissionData = {
         patient_id: patientUUID,
@@ -507,7 +293,7 @@ const VitalsForm: React.FC = () => {
       console.log('Submission data:', submissionData);
       
       const response = await vitalsApi.createVitals(submissionData);
-      console.log('✅ Vitals saved successfully:', response.data);
+      console.log('Vitals saved successfully:', response.data);
       
       alert('Vitals saved successfully!');
       
@@ -516,44 +302,40 @@ const VitalsForm: React.FC = () => {
         parseFloat(formData.weight_kg)
       );
       
-      const bmiStatus = calculatedBMI <= 25 ? 'Normal/Underweight' : 'Overweight';
-      
-      console.log(`BMI: ${calculatedBMI}, Status: ${bmiStatus}`);
+      console.log(`Calculated BMI: ${calculatedBMI}`);
       
       if (calculatedBMI <= 25) {
-        console.log('Navigating to General Assessment Form (BMI ≤ 25)');
         navigate('/general-assessment', { 
           state: { 
             patient: {
               id: patient?.id,
               patient_id: patient?.patient_id,
+              patient_number: patient?.patient_number,
               first_name: patient?.first_name,
               last_name: patient?.last_name
             },
             bmi: calculatedBMI,
-            bmiStatus: bmiStatus
+            bmiStatus: calculatedBMI <= 25 ? 'Normal/Underweight' : 'Overweight'
           } 
         });
       } else {
-        console.log('Navigating to Overweight Assessment Form (BMI > 25)');
         navigate('/overweight-assessment', { 
           state: { 
             patient: {
               id: patient?.id,
               patient_id: patient?.patient_id,
+              patient_number: patient?.patient_number,
               first_name: patient?.first_name,
               last_name: patient?.last_name
             },
             bmi: calculatedBMI,
-            bmiStatus: bmiStatus
+            bmiStatus: calculatedBMI <= 25 ? 'Normal/Underweight' : 'Overweight'
           } 
         });
       }
       
     } catch (error: any) {
-      console.error('❌ Error saving vitals:', error);
-      console.error('Error response data:', error.response?.data);
-      console.error('Error response status:', error.response?.status);
+      console.error('Error saving vitals:', error);
       
       let errorMessage = 'Failed to save vitals. ';
       
@@ -571,12 +353,6 @@ const VitalsForm: React.FC = () => {
         } else if (typeof errorData === 'string') {
           errorMessage += errorData;
         }
-      }
-      
-      if (errorMessage.includes('Must be a valid UUID')) {
-        errorMessage += '\n\nERROR: The patient ID is not a valid UUID.';
-        errorMessage += '\nPatient UUID sent: ' + patientUUID;
-        errorMessage += '\n\nThis suggests your API is not returning the correct patient UUIDs.';
       }
       
       alert(errorMessage);
@@ -608,28 +384,13 @@ const VitalsForm: React.FC = () => {
     return 'N/A';
   };
 
-  const getBmiStatus = (bmi: number | string): string => {
+  const getBmiStatusColor = (bmi: number | string): { bg: string; text: string } => {
     const num = typeof bmi === 'number' ? bmi : parseFloat(bmi);
     
-    if (isNaN(num)) return 'Unknown';
-    if (num < 18.5) return 'Underweight';
-    if (num < 25) return 'Normal';
-    return 'Overweight';
-  };
-
-  const getBmiStatusColor = (bmi: number | string): { bg: string; text: string } => {
-    const status = getBmiStatus(bmi);
-    
-    switch (status) {
-      case 'Underweight':
-        return { bg: '#fef3c7', text: '#92400e' };
-      case 'Normal':
-        return { bg: '#d1fae5', text: '#065f46' };
-      case 'Overweight':
-        return { bg: '#fee2e2', text: '#991b1b' };
-      default:
-        return { bg: '#f3f4f6', text: '#6b7280' };
-    }
+    if (isNaN(num)) return { bg: '#f3f4f6', text: '#6b7280' };
+    if (num < 18.5) return { bg: '#fef3c7', text: '#92400e' };
+    if (num < 25) return { bg: '#d1fae5', text: '#065f46' };
+    return { bg: '#fee2e2', text: '#991b1b' };
   };
 
   if (loading && !patient) {
@@ -716,12 +477,19 @@ const VitalsForm: React.FC = () => {
                   <p style={{ fontWeight: 600, fontSize: '1rem', color: '#1f2937', margin: 0 }}>
                     {patient.first_name} {patient.last_name}
                   </p>
-                  {/* REMOVED Patient ID display */}
+                  <p style={{ 
+                    fontSize: '0.875rem', 
+                    color: '#6b7280', 
+                    margin: '0.125rem 0 0 0',
+                    fontWeight: 500 
+                  }}>
+                    {patient.patient_number 
+                      ? `Patient #: ${patient.patient_number}`
+                      : 'Patient #: Not Available'}
+                  </p>
                 </div>
               </div>
             </div>
-            
-            {/* REMOVED the entire System ID Verified section */}
             
             {errors.patient && (
               <div style={{
@@ -824,9 +592,6 @@ const VitalsForm: React.FC = () => {
                 {errors.visit_date}
               </p>
             )}
-            <p style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '0.25rem' }}>
-              Today's date: {getTodayDate()}
-            </p>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
@@ -841,7 +606,7 @@ const VitalsForm: React.FC = () => {
                 onChange={handleInputChange}
                 step="0.1"
                 min="50"
-                max="250"
+                max="300"
                 placeholder="Enter height in cm"
                 style={{
                   width: '100%',
@@ -869,7 +634,7 @@ const VitalsForm: React.FC = () => {
                 onChange={handleInputChange}
                 step="0.1"
                 min="2"
-                max="300"
+                max="500"
                 placeholder="Enter weight in kg"
                 style={{
                   width: '100%',
@@ -1075,8 +840,7 @@ const VitalsForm: React.FC = () => {
                         backgroundColor: index % 2 === 0 ? 'white' : '#f9fafb'
                       }}>
                         <td style={{ padding: '1rem', fontSize: '0.875rem' }}>
-                          {vitals.visit_date ? new Date(vitals.visit_date).toLocaleDateString() : 
-                           vitals.created_at ? new Date(vitals.created_at).toLocaleDateString() : 'N/A'}
+                          {vitals.visit_date ? new Date(vitals.visit_date).toLocaleDateString() : 'N/A'}
                         </td>
                         <td style={{ padding: '1rem', fontSize: '0.875rem' }}>{vitals.height_cm}</td>
                         <td style={{ padding: '1rem', fontSize: '0.875rem' }}>{vitals.weight_kg}</td>

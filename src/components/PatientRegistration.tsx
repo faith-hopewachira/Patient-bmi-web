@@ -8,12 +8,10 @@ PatientRegistration Component
 This is the entry point of the application where new patients are registered.
 It collects basic patient information before proceeding to vitals measurement.
 
-Key Features:
-1. Collects required patient demographic information
-2. Generates or accepts a unique patient identifier
-3. Validates form data before submission
-4. Creates patient record in the database
-5. Navigates to VitalsForm with patient data
+Key Changes:
+1. Removed patient_number from form (will be auto-generated)
+2. Updated validation to not require patient_number
+3. Updated API call to not send patient_number
 
 */
 
@@ -21,7 +19,6 @@ const PatientRegistration: React.FC = () => {
   const navigate = useNavigate();
   
   const [formData, setFormData] = useState({
-    patient_number: '',       
     first_name: '',           
     last_name: '',        
     middle_name: '', 
@@ -32,13 +29,14 @@ const PatientRegistration: React.FC = () => {
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [generatedPatientNumber, setGeneratedPatientNumber] = useState<string>('');
 
   /*
   Function: Handle form submission
   Purpose: Validate and submit patient data to API, then navigate to next step
   Steps:
   1. Validate all required fields are filled
-  2. Prepare data for API submission
+  2. Prepare data for API submission (NO patient_number)
   3. Submit to patient creation endpoint
   4. Navigate to VitalsForm with patient data
   5. Handle errors with user-friendly messages
@@ -48,7 +46,7 @@ const PatientRegistration: React.FC = () => {
     setError(null);
     
     if (!formData.first_name || !formData.last_name || !formData.date_of_birth || 
-        !formData.gender || !formData.patient_number) {
+        !formData.gender) {
       setError('Please fill in all required fields');
       return;
     }
@@ -57,7 +55,6 @@ const PatientRegistration: React.FC = () => {
     
     try {
       const patientData = {
-        patient_number: formData.patient_number,
         first_name: formData.first_name,
         last_name: formData.last_name,
         middle_name: formData.middle_name || undefined,
@@ -80,7 +77,8 @@ const PatientRegistration: React.FC = () => {
         state: { 
           patient: {
             id: response.data.id,                   
-            patient_id: response.data.patient_number || response.data.patient_id,
+            patient_id: response.data.patient_number,
+            patient_number: response.data.patient_number,
             first_name: response.data.first_name,   
             last_name: response.data.last_name,   
           }
@@ -93,7 +91,7 @@ const PatientRegistration: React.FC = () => {
         const errorData = err.response.data;
         
         if (errorData.patient_number) {
-          setError('Patient number already exists. Please use a different number.');
+          setError('Patient number already exists. Please try again.');
         } 
         else if (errorData.detail) {
           setError(errorData.detail);
@@ -133,6 +131,17 @@ const PatientRegistration: React.FC = () => {
     navigate('/');
   };
 
+  /*
+  Function: Generate a preview patient number (client-side)
+  Purpose: Show user what format to expect
+  */
+  const generatePreviewNumber = () => {
+    const timestamp = Date.now().toString().slice(-6);
+    const randomNum = Math.floor(Math.random() * 1000);
+    const previewNumber = `PAT-${timestamp}-${randomNum.toString().padStart(3, '0')}`;
+    setGeneratedPatientNumber(previewNumber);
+  };
+
   return (
     <div>
       <h1 className="form-title">Patient Registration</h1>
@@ -140,6 +149,13 @@ const PatientRegistration: React.FC = () => {
       {error && (
         <div className="alert-box alert-error">
           <p>{error}</p>
+        </div>
+      )}
+      
+      {generatedPatientNumber && (
+        <div className="alert-box alert-info">
+          <p><strong>Sample Patient Number:</strong> {generatedPatientNumber}</p>
+          <p><small>Patient numbers are automatically generated upon successful registration.</small></p>
         </div>
       )}
       
@@ -235,20 +251,36 @@ const PatientRegistration: React.FC = () => {
           </div>
           
           <div className="form-group">
-            <label className="form-label">Patient Number *</label>
-            <input
-              type="text"
-              name="patient_number"
-              required
-              className="form-input"
-              value={formData.patient_number}
-              onChange={handleChange}
-              placeholder="PAT001"
-              disabled={isSubmitting}
-            />
-            <small style={{ color: '#6b7280', fontSize: '0.875rem' }}>
-              Unique identifier for the patient
-            </small>
+            <label className="form-label">Patient Number</label>
+            <div className="patient-number-info">
+              <div className="form-input readonly" style={{
+                backgroundColor: '#f9fafb',
+                color: '#6b7280',
+                cursor: 'not-allowed'
+              }}>
+                Auto-generated upon registration
+              </div>
+              <button
+                type="button"
+                onClick={generatePreviewNumber}
+                className="preview-btn"
+                disabled={isSubmitting}
+                style={{
+                  marginTop: '5px',
+                  padding: '3px 8px',
+                  fontSize: '0.75rem',
+                  backgroundColor: '#e5e7eb',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                Preview Format
+              </button>
+              <small style={{ color: '#6b7280', fontSize: '0.875rem', display: 'block', marginTop: '5px' }}>
+                Unique identifier will be automatically generated
+              </small>
+            </div>
           </div>
         </div>
         
